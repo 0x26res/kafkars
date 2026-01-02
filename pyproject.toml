@@ -1,0 +1,16 @@
+[project]
+name = "kafkars"
+version = "0.1.0"
+description = "Rust based, Arrow powered, python kafka client"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+python-source = "python"
+module-name = "kafkars"
