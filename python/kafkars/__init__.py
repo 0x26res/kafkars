@@ -1,3 +1,3 @@
-from .kafkars import hello
+from .kafkars import consume_messages, hello
 
-__all__ = ["hello"]
+__all__ = ["consume_messages", "hello"]

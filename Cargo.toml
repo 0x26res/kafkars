@@ -2,6 +2,7 @@
 name = "kafkars"
 version = "0.1.0"
 edition = "2021"
+license = "Apache-2.0"
 
 [lib]
 name = "kafkars"
@@ -9,3 +10,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.23", features = ["extension-module"] }
+rdkafka = "0.37"
