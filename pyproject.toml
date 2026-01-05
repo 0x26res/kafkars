@@ -8,10 +8,9 @@ version = "0.1.0"
 description = "Rust based, Arrow powered, python kafka client"
 readme = "README.md"
 license = { text = "Apache-2.0" }
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 classifiers = [
   "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -21,9 +20,9 @@ classifiers = [
 dependencies = [ "pyarrow>=14" ]
 
 [dependency-groups]
-test = [ "pytest>=8" ]
+test = [ "maturin", "pytest>=8" ]
 
 [tool.maturin]
 features = [ "pyo3/extension-module" ]
 python-source = "python"
-module-name = "kafkars"
+module-name = "kafkars._lib"

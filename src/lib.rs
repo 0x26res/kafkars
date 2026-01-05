@@ -136,7 +136,7 @@ impl PyConsumerManager {
         })
     }
 
-    fn poll(&mut self, py: Python<'_>, timeout_ms: u64) -> PyResult<PyObject> {
+    fn poll<'py>(&mut self, py: Python<'py>, timeout_ms: u64) -> PyResult<Bound<'py, PyAny>> {
         let messages = self.manager.poll(Duration::from_millis(timeout_ms));
 
         let keys: Vec<Option<&[u8]>> = messages.iter().map(|m| m.key.as_deref()).collect();
@@ -180,7 +180,7 @@ impl PyConsumerManager {
         self.manager.paused_partition_count()
     }
 
-    fn partition_state(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn partition_state<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let partition_info = self.manager.partition_info();
         let cutoff = self.manager.cutoff_ms();
 
@@ -219,7 +219,7 @@ impl PyConsumerManager {
 }
 
 #[pymodule]
-fn kafkars(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _lib(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyConsumerManager>()?;
     m.add_function(wrap_pyfunction!(validate_source_topic, m)?)?;
     Ok(())

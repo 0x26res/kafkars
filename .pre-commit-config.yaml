@@ -18,7 +18,7 @@ repos:
     rev: 1.9.2
     hooks:
       - id: bandit
-        files: "^python/ptars/.*.py$"
+        files: "^python/kafkars/.*.py$"
         additional_dependencies:
           - ".[toml]"
         args: ["--config=pyproject.toml"]
@@ -34,7 +34,7 @@ repos:
         args:
           - "--fix"
   - repo: https://github.com/astral-sh/uv-pre-commit
-    rev: 0.9.20
+    rev: 0.9.21
     hooks:
       - id: uv-lock
   - repo: https://github.com/kynan/nbstripout
@@ -56,10 +56,10 @@ repos:
     hooks:
       - id: ty
         name: ty-check
-        entry: uv run ty check
+        entry: uv run --with=ty ty check
         language: python
         types: [python]
-        files: ^python/ptars/.*
+        files: ^python/kafkars/.*
         pass_filenames: true
 
 

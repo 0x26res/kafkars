@@ -14,28 +14,21 @@ env:
 
 
 .PHONY: develop
-develop: env protoc
-	. .venv/bin/activate && \
-		uv run maturin develop
+develop: env
+	. .venv/bin/activate && uv run maturin develop
 
 .PHONY: test
 test: develop
-	RUST_BACKTRACE=1 uv run python -m pytest python/test/unit && cargo test
+	RUST_BACKTRACE=1 uv run python -m pytest python/tests && cargo test
 
 .PHONY: build
 build: env
-	. .venv/bin/activate && \
-		maturin build
+	uv run maturin build
 
 .PHONY: dist
 dist: env
 	. .venv/bin/activate && \
 		docker run --rm -v $(shell pwd):/io ghcr.io/pyo3/maturin build --release --strip --out dist
-
-
-.PHONY: protoc
-protoc: env
-	. .venv/bin/activate && python scripts/protoc.py
 
 .PHONY: lint
 lint:
@@ -50,9 +43,9 @@ coverage-env:
 
 .PHONY: coverage
 coverage: develop coverage-env
-	uv run coverage run --source=python/ptars -m pytest python/test/unit && \
+	uv run coverage run --source=python/kafkars -m pytest python/tests && \
 		uv run coverage xml -o coverage.xml
-	CARGO_INCREMENTAL=0 RUSTFLAGS="-Cinstrument-coverage" LLVM_PROFILE_FILE="ptars-%p-%m.profraw" cargo test
+	CARGO_INCREMENTAL=0 RUSTFLAGS="-Cinstrument-coverage" LLVM_PROFILE_FILE="kafkars-%p-%m.profraw" cargo test
 	grcov . -s . --binary-path ./target/debug/ -t lcov --branch --ignore-not-existing --ignore "target/*" --ignore "python/*" -o lcov.info
 
 .PHONY: update
@@ -72,7 +65,7 @@ benchmark: develop
 
 .PHONY: generate-ci
 generate-ci: develop
-	maturin generate-ci github --output=.github/workflows/release.yaml
+	uv run maturin generate-ci github --output=.github/workflows/release.yaml
 
 .PHONY: docs
 docs:
