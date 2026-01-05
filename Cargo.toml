@@ -1,13 +1,13 @@
-[package]
-name = "kafkars"
-version = "0.1.0"
-edition = "2021"
-license = "Apache-2.0"
+[dependencies]
+pyo3 = {version = "0.23", features = ["extension-module"]}
+rdkafka = "0.37"
 
 [lib]
-name = "kafkars"
 crate-type = ["cdylib"]
+name = "kafkars"
 
-[dependencies]
-pyo3 = { version = "0.23", features = ["extension-module"] }
-rdkafka = "0.37"
+[package]
+edition = "2021"
+license = "Apache-2.0"
+name = "kafkars"
+version = "0.1.0"

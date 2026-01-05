@@ -37,7 +37,9 @@ impl MessageConsumer for RdKafkaConsumer {
         match self.consumer.poll(Duration::from_millis(1000)) {
             Some(Ok(msg)) => {
                 let key = msg.key().map(|k| String::from_utf8_lossy(k).to_string());
-                let value = msg.payload().map(|v| String::from_utf8_lossy(v).to_string());
+                let value = msg
+                    .payload()
+                    .map(|v| String::from_utf8_lossy(v).to_string());
                 Some(Ok(KafkaMessage { key, value }))
             }
             Some(Err(e)) => Some(Err(e.to_string())),

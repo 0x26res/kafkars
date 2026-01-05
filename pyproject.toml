@@ -1,16 +1,26 @@
+[build-system]
+build-backend = "maturin"
+requires = [ "maturin>=1.7,<2" ]
+
 [project]
 name = "kafkars"
 version = "0.1.0"
 description = "Rust based, Arrow powered, python kafka client"
 readme = "README.md"
-requires-python = ">=3.9"
 license = { text = "Apache-2.0" }
 
-[build-system]
-requires = ["maturin>=1.7,<2.0"]
-build-backend = "maturin"
+requires-python = ">=3.9"
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
 
 [tool.maturin]
-features = ["pyo3/extension-module"]
+features = [ "pyo3/extension-module" ]
 python-source = "python"
 module-name = "kafkars"

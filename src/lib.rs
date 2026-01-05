@@ -14,7 +14,10 @@ fn consume_messages(config: HashMap<String, String>, topic: &str) -> PyResult<()
     let kafka_consumer = RdKafkaConsumer::new(config, topic)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
 
-    println!("Consuming messages from topic '{}' (press Ctrl+C to stop)...", topic);
+    println!(
+        "Consuming messages from topic '{}' (press Ctrl+C to stop)...",
+        topic
+    );
 
     consumer::consume_messages(&kafka_consumer, |msg: &KafkaMessage| {
         let key = msg.key.as_deref().unwrap_or("null");
