@@ -44,9 +44,9 @@ coverage-env:
 
 .PHONY: coverage
 coverage: develop coverage-env
-	uv run coverage run --source=python/kafkars -m pytest python/tests && \
-		uv run coverage xml -o coverage.xml
-	CARGO_INCREMENTAL=0 RUSTFLAGS="-Cinstrument-coverage" LLVM_PROFILE_FILE="kafkars-%p-%m.profraw" cargo test
+	uv run coverage run --source=python/kafkars -m pytest python/tests
+	uv run coverage xml -o coverage.xml
+	. .venv/bin/activate && CARGO_INCREMENTAL=0 RUSTFLAGS="-Cinstrument-coverage" LLVM_PROFILE_FILE="kafkars-%p-%m.profraw"  cargo test
 	grcov . -s . --binary-path ./target/debug/ -t lcov --branch --ignore-not-existing --ignore "target/*" --ignore "python/*" -o lcov.info
 
 .PHONY: update
@@ -55,14 +55,6 @@ update:
 		uv lock --upgrade && \
 		pre-commit autoupdate && pre-commit run --all-files && \
 		uv pip compile docs/requirements.txt.in > docs/requirements.txt
-
-.PHONY: benchmark
-benchmark: develop
-	maturin develop --release && \
-    	uv run pytest python/test/benchmark \
-		  --benchmark-name=short \
-		  --benchmark-columns=mean \
-		  --benchmark-sort=name
 
 .PHONY: generate-ci
 generate-ci: develop

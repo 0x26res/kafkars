@@ -20,7 +20,7 @@ classifiers = [
 dependencies = [ "pyarrow>=14" ]
 
 [dependency-groups]
-dev = [ "maturin", "pytest>=8", "ty" ]
+dev = [ "coverage", "maturin", "pytest>=8", "ty" ]
 
 [tool.maturin]
 features = [ "pyo3/extension-module" ]
