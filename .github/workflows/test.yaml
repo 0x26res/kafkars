@@ -1,0 +1,76 @@
+name: "test"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Format
+        run: cargo fmt && git diff --exit-code
+      - name: Lint
+        run: |
+          rustup update
+          rustup component add clippy
+          cargo clippy -- -D warnings
+
+
+  test:
+    strategy:
+      matrix:
+        python:
+          - "3.10"
+          - "3.11"
+          - "3.12"
+          - "3.13"
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python }}
+
+    - uses: astral-sh/setup-uv@v7
+      with:
+        version: "0.7.19"
+
+
+    - name: Install grcov
+      run: cargo install grcov
+
+    - name: Build
+      run: |
+        make develop
+        make protoc
+
+    - name: Run coverage
+      run: make coverage
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        files: ./lcov.info,./coverage.xml
+        fail_ci_if_error: true
+
+  all-tests-pass:
+    if: always()
+
+    needs:
+    - lint
+    - test
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: check test jobs
+        uses: re-actors/alls-green@v1.2.2
+        with:
+          jobs: ${{ toJSON(needs) }}
