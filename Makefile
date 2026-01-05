@@ -4,7 +4,7 @@ all:
 
 .PHONY: clean
 clean:
-	cargo clean && rm -rf target
+	cargo clean && rm -rf target && rm -f python/kafkars/*.so
 
 .PHONY: env
 env:
