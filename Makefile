@@ -66,7 +66,7 @@ benchmark: develop
 
 .PHONY: generate-ci
 generate-ci: develop
-	uv run maturin generate-ci github --output=.github/workflows/release.yaml
+	uv run maturin generate-ci github --output=.github/workflows/ci.yaml --platform=manylinux --platform=macos
 
 .PHONY: docs
 docs:
