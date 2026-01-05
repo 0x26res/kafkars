@@ -1,15 +1,19 @@
+use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::{BorrowedMessage, Message};
+use rdkafka::topic_partition_list::Offset;
 use rdkafka::TopicPartitionList;
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
-/// Information about a partition's consumption state
+use crate::source_topic::{OffsetPolicy, SourceTopic};
+
 #[derive(Debug, Clone)]
 pub struct PartitionInfo {
     pub topic: String,
     pub partition: i32,
-    pub offset: i64,
+    pub start_offset: Option<i64>,
+    pub current_offset: i64,
     pub timestamp_ms: Option<i64>,
     pub is_live: bool,
 }
@@ -19,14 +23,14 @@ impl PartitionInfo {
         Self {
             topic,
             partition,
-            offset: 0,
+            start_offset: None,
+            current_offset: 0,
             timestamp_ms: None,
             is_live: false,
         }
     }
 }
 
-/// A message with its timestamp for ordering
 #[derive(Debug, Clone)]
 pub struct TimestampedMessage {
     pub key: Option<Vec<u8>>,
@@ -37,7 +41,6 @@ pub struct TimestampedMessage {
     pub timestamp_ms: i64,
 }
 
-/// Metrics for consumption performance
 #[derive(Debug, Clone, Default)]
 pub struct ConsumerMetrics {
     pub messages_consumed: u64,
@@ -54,10 +57,7 @@ impl ConsumerMetrics {
     }
 }
 
-/// Manages Kafka consumer with partition tracking and message buffering.
-///
-/// Implements backpressure by pausing partitions that are ahead of the
-/// low water mark when the held message buffer exceeds capacity.
+/// Manages Kafka consumer with partition tracking, message buffering, and backpressure.
 pub struct ConsumerManager {
     consumer: BaseConsumer,
     cutoff_ms: i64,
@@ -71,7 +71,6 @@ pub struct ConsumerManager {
 }
 
 impl ConsumerManager {
-    /// Create a new ConsumerManager
     pub fn new(consumer: BaseConsumer, cutoff_ms: i64, batch_size: usize) -> Self {
         Self {
             consumer,
@@ -86,9 +85,63 @@ impl ConsumerManager {
         }
     }
 
-    /// Poll for messages and return those ready to be released
+    pub fn create(
+        config: HashMap<String, String>,
+        source_topics: Vec<SourceTopic>,
+        cutoff_ms: i64,
+        batch_size: usize,
+    ) -> Result<Self, String> {
+        let mut client_config = ClientConfig::new();
+        for (key, value) in &config {
+            client_config.set(key, value);
+        }
+        let consumer: BaseConsumer = client_config.create().map_err(|e| e.to_string())?;
+
+        let topic_names: Vec<&str> = source_topics.iter().map(|t| t.name.as_str()).collect();
+        consumer
+            .subscribe(&topic_names)
+            .map_err(|e| e.to_string())?;
+
+        let metadata = consumer
+            .fetch_metadata(None, Duration::from_secs(10))
+            .map_err(|e| e.to_string())?;
+
+        let mut tpl = TopicPartitionList::new();
+
+        for source_topic in &source_topics {
+            let offset = Self::policy_to_offset(&source_topic.offset_policy);
+
+            if let Some(topic_metadata) = metadata
+                .topics()
+                .iter()
+                .find(|t| t.name() == source_topic.name)
+            {
+                for partition in topic_metadata.partitions() {
+                    tpl.add_partition_offset(&source_topic.name, partition.id(), offset)
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+        }
+
+        if tpl.count() > 0 {
+            consumer.assign(&tpl).map_err(|e| e.to_string())?;
+        }
+
+        Ok(Self::new(consumer, cutoff_ms, batch_size))
+    }
+
+    fn policy_to_offset(policy: &OffsetPolicy) -> Offset {
+        match policy {
+            OffsetPolicy::Latest => Offset::End,
+            OffsetPolicy::Earliest => Offset::Beginning,
+            OffsetPolicy::Committed => Offset::Stored,
+            OffsetPolicy::RelativeTime { ms } => Offset::OffsetTail(*ms),
+            OffsetPolicy::AbsoluteTime { ms } => Offset::Offset(*ms),
+            OffsetPolicy::StartOfDay { time_ms, .. } => Offset::Offset(*time_ms),
+        }
+    }
+
     pub fn poll(&mut self, timeout: Duration) -> Vec<TimestampedMessage> {
-        // Poll for new messages - extract data immediately to avoid borrow issues
         let polled = self.consumer.poll(timeout);
         if let Some(result) = polled {
             match result {
@@ -105,17 +158,11 @@ impl ConsumerManager {
             }
         }
 
-        // Update low water mark
         self.update_low_water_mark();
-
-        // Manage paused partitions (backpressure)
         self.manage_paused_partitions();
-
-        // Release messages up to the limit
         self.release_messages()
     }
 
-    /// Extract data from a raw Kafka message into a TimestampedMessage
     fn extract_message(msg: &BorrowedMessage) -> Option<TimestampedMessage> {
         let timestamp_ms = msg.timestamp().to_millis()?;
 
@@ -129,7 +176,6 @@ impl ConsumerManager {
         })
     }
 
-    /// Update partition info based on a consumed message
     fn update_partition_info(&mut self, msg: &TimestampedMessage) {
         let key = (msg.topic.clone(), msg.partition);
         let info = self
@@ -137,12 +183,14 @@ impl ConsumerManager {
             .entry(key)
             .or_insert_with(|| PartitionInfo::new(msg.topic.clone(), msg.partition));
 
-        info.offset = msg.offset;
+        if info.start_offset.is_none() {
+            info.start_offset = Some(msg.offset);
+        }
+        info.current_offset = msg.offset;
         info.timestamp_ms = Some(msg.timestamp_ms);
         info.is_live = msg.timestamp_ms >= self.cutoff_ms;
     }
 
-    /// Update the low water mark based on non-live partitions
     fn update_low_water_mark(&mut self) {
         let non_live_timestamps: Vec<i64> = self
             .partition_info
@@ -154,7 +202,6 @@ impl ConsumerManager {
         self.low_water_mark_ms = non_live_timestamps.into_iter().min();
     }
 
-    /// Get the limit timestamp for releasing messages
     fn get_limit(&self) -> i64 {
         match self.low_water_mark_ms {
             Some(lwm) => lwm.min(self.cutoff_ms),
@@ -162,7 +209,6 @@ impl ConsumerManager {
         }
     }
 
-    /// Release messages that are below the current limit
     fn release_messages(&mut self) -> Vec<TimestampedMessage> {
         let limit = self.get_limit();
         let mut released = Vec::new();
@@ -181,18 +227,14 @@ impl ConsumerManager {
         released
     }
 
-    /// Manage partition pausing/resuming based on buffer pressure
     fn manage_paused_partitions(&mut self) {
         if self.held_messages.len() > self.max_held_messages {
-            // Pause partitions that are ahead of the low water mark
             self.pause_ahead_partitions();
         } else if self.paused_count > 0 && self.held_messages.len() < self.batch_size {
-            // Resume all partitions when buffer is low
             self.resume_all_partitions();
         }
     }
 
-    /// Pause partitions whose timestamp is ahead of the low water mark
     fn pause_ahead_partitions(&mut self) {
         let Some(lwm) = self.low_water_mark_ms else {
             return;
@@ -218,7 +260,6 @@ impl ConsumerManager {
         }
     }
 
-    /// Resume all paused partitions
     fn resume_all_partitions(&mut self) {
         if let Ok(assignment) = self.consumer.assignment() {
             if let Err(e) = self.consumer.resume(&assignment) {
@@ -230,7 +271,6 @@ impl ConsumerManager {
         }
     }
 
-    /// Get the current low water mark if still priming (replaying historical data)
     pub fn get_priming_watermark(&self) -> Option<i64> {
         if self.partition_info.values().any(|p| !p.is_live) {
             self.low_water_mark_ms
@@ -239,29 +279,28 @@ impl ConsumerManager {
         }
     }
 
-    /// Check if all partitions have caught up to the cutoff
     pub fn is_live(&self) -> bool {
         !self.partition_info.is_empty() && self.partition_info.values().all(|p| p.is_live)
     }
 
-    /// Flush and return current metrics, resetting counters
     pub fn flush_metrics(&mut self) -> ConsumerMetrics {
         self.metrics.reset()
     }
 
-    /// Get the number of held messages
     pub fn held_message_count(&self) -> usize {
         self.held_messages.len()
     }
 
-    /// Get the number of paused partitions
     pub fn paused_partition_count(&self) -> usize {
         self.paused_count
     }
 
-    /// Get partition info for monitoring
     pub fn partition_info(&self) -> &HashMap<(String, i32), PartitionInfo> {
         &self.partition_info
+    }
+
+    pub fn cutoff_ms(&self) -> i64 {
+        self.cutoff_ms
     }
 }
 
@@ -274,7 +313,8 @@ mod tests {
         let info = PartitionInfo::new("test-topic".to_string(), 0);
         assert_eq!(info.topic, "test-topic");
         assert_eq!(info.partition, 0);
-        assert_eq!(info.offset, 0);
+        assert!(info.start_offset.is_none());
+        assert_eq!(info.current_offset, 0);
         assert!(info.timestamp_ms.is_none());
         assert!(!info.is_live);
     }

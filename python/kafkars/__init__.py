@@ -1,3 +1,5 @@
-from .kafkars import consume_messages, hello
+from .kafkars import PyConsumerManager as ConsumerManager
+from .kafkars import validate_source_topic
+from .source_topic import SourceTopic
 
-__all__ = ["consume_messages", "hello"]
+__all__ = ["ConsumerManager", "SourceTopic", "validate_source_topic"]

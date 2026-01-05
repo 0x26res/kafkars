@@ -1,4 +1,6 @@
 [dependencies]
+arrow = {version = "54", features = ["pyarrow"]}
+chrono = "0.4"
 pyo3 = {version = "0.23", features = ["extension-module"]}
 rdkafka = "0.37"
 
