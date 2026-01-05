@@ -1,5 +1,5 @@
 mod consumer;
-mod source_topic;
+pub mod source_topic;
 
 use consumer::{KafkaMessage, RdKafkaConsumer};
 use pyo3::prelude::*;
