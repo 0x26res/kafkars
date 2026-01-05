@@ -65,6 +65,7 @@ pub fn consume_messages<C: MessageConsumer, F: FnMut(&KafkaMessage)>(
     }
 }
 
+#[allow(dead_code)]
 pub fn consume_messages_with_limit<C: MessageConsumer, F: FnMut(&KafkaMessage)>(
     consumer: &C,
     limit: usize,

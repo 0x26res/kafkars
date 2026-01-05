@@ -1,4 +1,5 @@
 mod consumer;
+mod source_topic;
 
 use consumer::{KafkaMessage, RdKafkaConsumer};
 use pyo3::prelude::*;
@@ -12,7 +13,7 @@ fn hello() -> String {
 #[pyfunction]
 fn consume_messages(config: HashMap<String, String>, topic: &str) -> PyResult<()> {
     let kafka_consumer = RdKafkaConsumer::new(config, topic)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
+        .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
 
     println!(
         "Consuming messages from topic '{}' (press Ctrl+C to stop)...",
