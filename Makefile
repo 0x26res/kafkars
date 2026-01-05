@@ -8,9 +8,9 @@ clean:
 
 .PHONY: env
 env:
-	test -d .venv || python3 -m venv .venv
+	test -d .venv || uv sync --python=3.12
 	. .venv/bin/activate && \
-		uv sync --group=test --no-dev
+		uv sync --group=dev
 
 
 .PHONY: develop
@@ -19,7 +19,7 @@ develop: env
 
 .PHONY: test
 test: develop
-	RUST_BACKTRACE=1 uv run python -m pytest python/tests && cargo test
+	RUST_BACKTRACE=1 uv run python -m pytest python/tests && . .venv/bin/activate && cargo test
 
 .PHONY: build
 build: env
@@ -32,7 +32,8 @@ dist: env
 
 .PHONY: lint
 lint:
-	cargo fmt && \
+	. .venv/bin/activate && \
+		cargo fmt && \
 		cargo clippy -- -D warnings && \
 		pre-commit run --all-files
 
