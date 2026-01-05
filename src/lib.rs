@@ -1,8 +1,10 @@
 mod consumer;
+pub mod consumer_manager;
 pub mod source_topic;
 
 use consumer::{KafkaMessage, RdKafkaConsumer};
 use pyo3::prelude::*;
+use source_topic::SourceTopic;
 use std::collections::HashMap;
 
 #[pyfunction]
@@ -12,7 +14,9 @@ fn hello() -> String {
 
 #[pyfunction]
 fn consume_messages(config: HashMap<String, String>, topic: &str) -> PyResult<()> {
-    let kafka_consumer = RdKafkaConsumer::new(config, topic)
+    let source_topic = SourceTopic::from_latest(topic);
+
+    let kafka_consumer = RdKafkaConsumer::new(config, vec![source_topic])
         .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
 
     println!(

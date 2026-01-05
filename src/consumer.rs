@@ -1,8 +1,12 @@
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::Message;
+use rdkafka::topic_partition_list::Offset;
+use rdkafka::TopicPartitionList;
 use std::collections::HashMap;
 use std::time::Duration;
+
+use crate::source_topic::{OffsetPolicy, SourceTopic};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct KafkaMessage {
@@ -19,16 +23,59 @@ pub struct RdKafkaConsumer {
 }
 
 impl RdKafkaConsumer {
-    pub fn new(config: HashMap<String, String>, topic: &str) -> Result<Self, String> {
+    pub fn new(
+        config: HashMap<String, String>,
+        source_topics: Vec<SourceTopic>,
+    ) -> Result<Self, String> {
         let mut client_config = ClientConfig::new();
         for (key, value) in &config {
             client_config.set(key, value);
         }
         let consumer: BaseConsumer = client_config.create().map_err(|e| e.to_string())?;
 
-        consumer.subscribe(&[topic]).map_err(|e| e.to_string())?;
+        let topic_names: Vec<&str> = source_topics.iter().map(|t| t.name.as_str()).collect();
+        consumer
+            .subscribe(&topic_names)
+            .map_err(|e| e.to_string())?;
+
+        // Get metadata to find partitions for each topic
+        let metadata = consumer
+            .fetch_metadata(None, Duration::from_secs(10))
+            .map_err(|e| e.to_string())?;
+
+        let mut tpl = TopicPartitionList::new();
+
+        for source_topic in &source_topics {
+            let offset = Self::policy_to_offset(&source_topic.offset_policy);
+
+            if let Some(topic_metadata) = metadata
+                .topics()
+                .iter()
+                .find(|t| t.name() == source_topic.name)
+            {
+                for partition in topic_metadata.partitions() {
+                    tpl.add_partition_offset(&source_topic.name, partition.id(), offset)
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+        }
+
+        if tpl.count() > 0 {
+            consumer.assign(&tpl).map_err(|e| e.to_string())?;
+        }
 
         Ok(Self { consumer })
+    }
+
+    fn policy_to_offset(policy: &OffsetPolicy) -> Offset {
+        match policy {
+            OffsetPolicy::Latest => Offset::End,
+            OffsetPolicy::Earliest => Offset::Beginning,
+            OffsetPolicy::Committed => Offset::Stored,
+            OffsetPolicy::RelativeTime { ms } => Offset::OffsetTail(*ms),
+            OffsetPolicy::AbsoluteTime { ms } => Offset::Offset(*ms),
+            OffsetPolicy::StartOfDay { time_ms, .. } => Offset::Offset(*time_ms),
+        }
     }
 }
 

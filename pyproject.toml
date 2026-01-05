@@ -20,6 +20,9 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
 ]
 
+[dependency-groups]
+test = [ "pytest>=8" ]
+
 [tool.maturin]
 features = [ "pyo3/extension-module" ]
 python-source = "python"
