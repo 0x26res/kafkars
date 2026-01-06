@@ -51,10 +51,10 @@ coverage: develop coverage-env
 
 .PHONY: update
 update:
-	cargo generate-lockfile && \
-		uv lock --upgrade && \
-		pre-commit autoupdate && pre-commit run --all-files && \
-		uv pip compile docs/requirements.txt.in > docs/requirements.txt
+	cargo generate-lockfile
+	uv lock --upgrade
+	pre-commit autoupdate && pre-commit run --all-files
+	# uv pip compile docs/requirements.txt.in > docs/requirements.txt
 
 .PHONY: generate-ci
 generate-ci: develop
