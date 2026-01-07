@@ -142,6 +142,24 @@ impl ConsumerManager {
     }
 
     pub fn poll(&mut self, timeout: Duration) -> Vec<TimestampedMessage> {
+        // First poll with the given timeout
+        if !self.poll_one(timeout) {
+            // No message received, just do housekeeping and return
+            self.update_low_water_mark();
+            self.manage_paused_partitions();
+            return self.release_messages();
+        }
+
+        // Message received, keep polling with zero timeout to batch messages
+        while self.held_messages.len() < self.max_held_messages && self.poll_one(Duration::ZERO) {}
+
+        self.update_low_water_mark();
+        self.manage_paused_partitions();
+        self.release_messages()
+    }
+
+    /// Polls for a single message. Returns true if a message was received.
+    fn poll_one(&mut self, timeout: Duration) -> bool {
         let polled = self.consumer.poll(timeout);
         if let Some(result) = polled {
             match result {
@@ -150,6 +168,7 @@ impl ConsumerManager {
                         self.update_partition_info(&timestamped);
                         self.held_messages.push_back(timestamped);
                         self.metrics.messages_consumed += 1;
+                        return true;
                     }
                 }
                 Err(e) => {
@@ -157,10 +176,7 @@ impl ConsumerManager {
                 }
             }
         }
-
-        self.update_low_water_mark();
-        self.manage_paused_partitions();
-        self.release_messages()
+        false
     }
 
     fn extract_message(msg: &BorrowedMessage) -> Option<TimestampedMessage> {
