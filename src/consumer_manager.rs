@@ -3,7 +3,7 @@ use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::{BorrowedMessage, Message};
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::TopicPartitionList;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
 
 use crate::source_topic::{OffsetPolicy, SourceTopic};
@@ -60,6 +60,7 @@ impl ConsumerMetrics {
 /// Manages Kafka consumer with partition tracking, message buffering, and backpressure.
 pub struct ConsumerManager {
     consumer: BaseConsumer,
+    topic_names: Vec<String>,
     cutoff_ms: i64,
     partition_info: HashMap<(String, i32), PartitionInfo>,
     held_messages: VecDeque<TimestampedMessage>,
@@ -71,9 +72,15 @@ pub struct ConsumerManager {
 }
 
 impl ConsumerManager {
-    pub fn new(consumer: BaseConsumer, cutoff_ms: i64, batch_size: usize) -> Self {
+    pub fn new(
+        consumer: BaseConsumer,
+        topic_names: Vec<String>,
+        cutoff_ms: i64,
+        batch_size: usize,
+    ) -> Self {
         Self {
             consumer,
+            topic_names,
             cutoff_ms,
             partition_info: HashMap::new(),
             held_messages: VecDeque::new(),
@@ -91,6 +98,14 @@ impl ConsumerManager {
         cutoff_ms: i64,
         batch_size: usize,
     ) -> Result<Self, String> {
+        // Validate that topic names are unique
+        let mut seen_topics = HashSet::new();
+        for topic in &source_topics {
+            if !seen_topics.insert(&topic.name) {
+                return Err(format!("duplicate topic: '{}'", topic.name));
+            }
+        }
+
         let mut client_config = ClientConfig::new();
         for (key, value) in &config {
             client_config.set(key, value);
@@ -127,7 +142,8 @@ impl ConsumerManager {
             consumer.assign(&tpl).map_err(|e| e.to_string())?;
         }
 
-        Ok(Self::new(consumer, cutoff_ms, batch_size))
+        let topic_names = source_topics.into_iter().map(|t| t.name).collect();
+        Ok(Self::new(consumer, topic_names, cutoff_ms, batch_size))
     }
 
     fn policy_to_offset(policy: &OffsetPolicy) -> Offset {
@@ -141,25 +157,26 @@ impl ConsumerManager {
         }
     }
 
-    pub fn poll(&mut self, timeout: Duration) -> Vec<TimestampedMessage> {
+    pub fn poll(&mut self, timeout: Duration) -> Result<Vec<TimestampedMessage>, String> {
         // First poll with the given timeout
-        if !self.poll_one(timeout) {
+        if !self.poll_one(timeout)? {
             // No message received, just do housekeeping and return
             self.update_low_water_mark();
             self.manage_paused_partitions();
-            return self.release_messages();
+            return Ok(self.release_messages());
         }
 
         // Message received, keep polling with zero timeout to batch messages
-        while self.held_messages.len() < self.max_held_messages && self.poll_one(Duration::ZERO) {}
+        while self.held_messages.len() < self.max_held_messages && self.poll_one(Duration::ZERO)? {}
 
         self.update_low_water_mark();
         self.manage_paused_partitions();
-        self.release_messages()
+        Ok(self.release_messages())
     }
 
-    /// Polls for a single message. Returns true if a message was received.
-    fn poll_one(&mut self, timeout: Duration) -> bool {
+    /// Polls for a single message. Returns Ok(true) if a message was received,
+    /// Ok(false) if no message, or Err if an error occurred.
+    fn poll_one(&mut self, timeout: Duration) -> Result<bool, String> {
         let polled = self.consumer.poll(timeout);
         if let Some(result) = polled {
             match result {
@@ -168,15 +185,19 @@ impl ConsumerManager {
                         self.update_partition_info(&timestamped);
                         self.held_messages.push_back(timestamped);
                         self.metrics.messages_consumed += 1;
-                        return true;
+                        return Ok(true);
                     }
                 }
                 Err(e) => {
-                    eprintln!("Error polling: {}", e);
+                    return Err(format!(
+                        "{} (subscribed topics: {})",
+                        e,
+                        self.topic_names.join(", ")
+                    ));
                 }
             }
         }
-        false
+        Ok(false)
     }
 
     fn extract_message(msg: &BorrowedMessage) -> Option<TimestampedMessage> {
@@ -366,5 +387,24 @@ mod tests {
         assert_eq!(msg.key, Some(b"key1".to_vec()));
         assert_eq!(msg.offset, 42);
         assert_eq!(msg.timestamp_ms, 1_000_000);
+    }
+
+    #[test]
+    fn test_duplicate_topics_rejected() {
+        let config = HashMap::new();
+        let topics = vec![
+            SourceTopic::from_latest("topic_1".to_string()),
+            SourceTopic::from_earliest("topic_1".to_string()),
+        ];
+
+        let result = ConsumerManager::create(config, topics, 0, 100);
+        match result {
+            Err(e) => assert!(
+                e.contains("duplicate topic"),
+                "expected duplicate topic error, got: {}",
+                e
+            ),
+            Ok(_) => panic!("expected error for duplicate topics"),
+        }
     }
 }

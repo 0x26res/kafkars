@@ -137,7 +137,10 @@ impl PyConsumerManager {
     }
 
     fn poll<'py>(&mut self, py: Python<'py>, timeout_ms: u64) -> PyResult<Bound<'py, PyAny>> {
-        let messages = self.manager.poll(Duration::from_millis(timeout_ms));
+        let messages = self
+            .manager
+            .poll(Duration::from_millis(timeout_ms))
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
 
         let keys: Vec<Option<&[u8]>> = messages.iter().map(|m| m.key.as_deref()).collect();
         let values: Vec<Option<&[u8]>> = messages.iter().map(|m| m.value.as_deref()).collect();
