@@ -112,29 +112,34 @@ impl ConsumerManager {
         }
         let consumer: BaseConsumer = client_config.create().map_err(|e| e.to_string())?;
 
-        let topic_names: Vec<&str> = source_topics.iter().map(|t| t.name.as_str()).collect();
-        consumer
-            .subscribe(&topic_names)
-            .map_err(|e| e.to_string())?;
-
         let metadata = consumer
             .fetch_metadata(None, Duration::from_secs(10))
             .map_err(|e| e.to_string())?;
 
         let mut tpl = TopicPartitionList::new();
+        let timeout = Duration::from_secs(10);
 
         for source_topic in &source_topics {
-            let offset = Self::policy_to_offset(&source_topic.offset_policy);
-
-            if let Some(topic_metadata) = metadata
+            let topic_metadata = metadata
                 .topics()
                 .iter()
                 .find(|t| t.name() == source_topic.name)
-            {
-                for partition in topic_metadata.partitions() {
-                    tpl.add_partition_offset(&source_topic.name, partition.id(), offset)
-                        .map_err(|e| e.to_string())?;
-                }
+                .ok_or_else(|| format!("topic '{}' not found", source_topic.name))?;
+
+            for partition in topic_metadata.partitions() {
+                let offset = Self::resolve_offset(
+                    &consumer,
+                    &source_topic.name,
+                    partition.id(),
+                    &source_topic.offset_policy,
+                    timeout,
+                )?;
+                tpl.add_partition_offset(
+                    &source_topic.name,
+                    partition.id(),
+                    Offset::Offset(offset),
+                )
+                .map_err(|e| e.to_string())?;
             }
         }
 
@@ -146,14 +151,105 @@ impl ConsumerManager {
         Ok(Self::new(consumer, topic_names, cutoff_ms, batch_size))
     }
 
-    fn policy_to_offset(policy: &OffsetPolicy) -> Offset {
+    fn resolve_offset(
+        consumer: &BaseConsumer,
+        topic: &str,
+        partition: i32,
+        policy: &OffsetPolicy,
+        timeout: Duration,
+    ) -> Result<i64, String> {
         match policy {
-            OffsetPolicy::Latest => Offset::End,
-            OffsetPolicy::Earliest => Offset::Beginning,
-            OffsetPolicy::Committed => Offset::Stored,
-            OffsetPolicy::RelativeTime { ms } => Offset::OffsetTail(*ms),
-            OffsetPolicy::AbsoluteTime { ms } => Offset::Offset(*ms),
-            OffsetPolicy::StartOfDay { time_ms, .. } => Offset::Offset(*time_ms),
+            OffsetPolicy::Latest => {
+                let (_, high) = consumer
+                    .fetch_watermarks(topic, partition, timeout)
+                    .map_err(|e| e.to_string())?;
+                Ok(high)
+            }
+            OffsetPolicy::Earliest => {
+                let (low, _) = consumer
+                    .fetch_watermarks(topic, partition, timeout)
+                    .map_err(|e| e.to_string())?;
+                Ok(low)
+            }
+            OffsetPolicy::Committed => {
+                let mut tpl = TopicPartitionList::new();
+                tpl.add_partition(topic, partition);
+                let committed = consumer
+                    .committed_offsets(tpl, timeout)
+                    .map_err(|e| e.to_string())?;
+
+                if let Some(elem) = committed.elements().first() {
+                    match elem.offset() {
+                        Offset::Offset(o) => Ok(o),
+                        Offset::Invalid => {
+                            // No committed offset, fall back to earliest
+                            let (low, _) = consumer
+                                .fetch_watermarks(topic, partition, timeout)
+                                .map_err(|e| e.to_string())?;
+                            Ok(low)
+                        }
+                        _ => {
+                            let (low, _) = consumer
+                                .fetch_watermarks(topic, partition, timeout)
+                                .map_err(|e| e.to_string())?;
+                            Ok(low)
+                        }
+                    }
+                } else {
+                    Err(format!(
+                        "failed to get committed offset for {}:{}",
+                        topic, partition
+                    ))
+                }
+            }
+            OffsetPolicy::RelativeTime { ms } => {
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|e| e.to_string())?
+                    .as_millis() as i64;
+                let target_ms = now_ms - ms;
+                Self::offset_for_timestamp(consumer, topic, partition, target_ms, timeout)
+            }
+            OffsetPolicy::AbsoluteTime { ms } => {
+                Self::offset_for_timestamp(consumer, topic, partition, *ms, timeout)
+            }
+            OffsetPolicy::StartOfDay { time_ms, .. } => {
+                Self::offset_for_timestamp(consumer, topic, partition, *time_ms, timeout)
+            }
+        }
+    }
+
+    fn offset_for_timestamp(
+        consumer: &BaseConsumer,
+        topic: &str,
+        partition: i32,
+        timestamp_ms: i64,
+        timeout: Duration,
+    ) -> Result<i64, String> {
+        let mut tpl = TopicPartitionList::new();
+        tpl.add_partition_offset(topic, partition, Offset::Offset(timestamp_ms))
+            .map_err(|e| e.to_string())?;
+
+        let result = consumer
+            .offsets_for_times(tpl, timeout)
+            .map_err(|e| e.to_string())?;
+
+        if let Some(elem) = result.elements().first() {
+            match elem.offset() {
+                Offset::Offset(o) => Ok(o),
+                _ => {
+                    // Timestamp is beyond available data, use high watermark
+                    let (_, high) = consumer
+                        .fetch_watermarks(topic, partition, timeout)
+                        .map_err(|e| e.to_string())?;
+                    Ok(high)
+                }
+            }
+        } else {
+            Err(format!(
+                "failed to resolve offset for timestamp {} on {}:{}",
+                timestamp_ms, topic, partition
+            ))
         }
     }
 
