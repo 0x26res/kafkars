@@ -73,7 +73,7 @@ uv run python bench/poll_messages.py localhost:9092 topic_1:latest
 uv run python bench/poll_messages.py localhost:9092 topic_1:earliest
 
 # Poll multiple topics with different policies
-uv run python bench/poll_messages.py localhost:9092 topic_1:latest topic_2:earliest
+uv run python bench/poll_messages.py localhost:9092 topic_2:earliest topic_1:earliest
 
 # Poll from 1 hour ago (3600000 ms)
 uv run python bench/poll_messages.py localhost:9092 topic_1:relative_time:3600000

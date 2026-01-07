@@ -112,19 +112,29 @@ impl ConsumerManager {
         }
         let consumer: BaseConsumer = client_config.create().map_err(|e| e.to_string())?;
 
-        let metadata = consumer
-            .fetch_metadata(None, Duration::from_secs(10))
-            .map_err(|e| e.to_string())?;
-
         let mut tpl = TopicPartitionList::new();
         let timeout = Duration::from_secs(10);
 
         for source_topic in &source_topics {
+            // Fetch metadata for each topic explicitly
+            let metadata = consumer
+                .fetch_metadata(Some(&source_topic.name), timeout)
+                .map_err(|e| {
+                    format!(
+                        "failed to fetch metadata for '{}': {}",
+                        source_topic.name, e
+                    )
+                })?;
+
             let topic_metadata = metadata
                 .topics()
                 .iter()
                 .find(|t| t.name() == source_topic.name)
                 .ok_or_else(|| format!("topic '{}' not found", source_topic.name))?;
+
+            if topic_metadata.partitions().is_empty() {
+                return Err(format!("topic '{}' has no partitions", source_topic.name));
+            }
 
             for partition in topic_metadata.partitions() {
                 let offset = Self::resolve_offset(
@@ -134,18 +144,12 @@ impl ConsumerManager {
                     &source_topic.offset_policy,
                     timeout,
                 )?;
-                tpl.add_partition_offset(
-                    &source_topic.name,
-                    partition.id(),
-                    Offset::Offset(offset),
-                )
-                .map_err(|e| e.to_string())?;
+                tpl.add_partition_offset(&source_topic.name, partition.id(), offset)
+                    .map_err(|e| e.to_string())?;
             }
         }
 
-        if tpl.count() > 0 {
-            consumer.assign(&tpl).map_err(|e| e.to_string())?;
-        }
+        consumer.assign(&tpl).map_err(|e| e.to_string())?;
 
         let topic_names = source_topics.into_iter().map(|t| t.name).collect();
         Ok(Self::new(consumer, topic_names, cutoff_ms, batch_size))
@@ -157,51 +161,13 @@ impl ConsumerManager {
         partition: i32,
         policy: &OffsetPolicy,
         timeout: Duration,
-    ) -> Result<i64, String> {
+    ) -> Result<Offset, String> {
         match policy {
-            OffsetPolicy::Latest => {
-                let (_, high) = consumer
-                    .fetch_watermarks(topic, partition, timeout)
-                    .map_err(|e| e.to_string())?;
-                Ok(high)
-            }
-            OffsetPolicy::Earliest => {
-                let (low, _) = consumer
-                    .fetch_watermarks(topic, partition, timeout)
-                    .map_err(|e| e.to_string())?;
-                Ok(low)
-            }
-            OffsetPolicy::Committed => {
-                let mut tpl = TopicPartitionList::new();
-                tpl.add_partition(topic, partition);
-                let committed = consumer
-                    .committed_offsets(tpl, timeout)
-                    .map_err(|e| e.to_string())?;
-
-                if let Some(elem) = committed.elements().first() {
-                    match elem.offset() {
-                        Offset::Offset(o) => Ok(o),
-                        Offset::Invalid => {
-                            // No committed offset, fall back to earliest
-                            let (low, _) = consumer
-                                .fetch_watermarks(topic, partition, timeout)
-                                .map_err(|e| e.to_string())?;
-                            Ok(low)
-                        }
-                        _ => {
-                            let (low, _) = consumer
-                                .fetch_watermarks(topic, partition, timeout)
-                                .map_err(|e| e.to_string())?;
-                            Ok(low)
-                        }
-                    }
-                } else {
-                    Err(format!(
-                        "failed to get committed offset for {}:{}",
-                        topic, partition
-                    ))
-                }
-            }
+            // Use symbolic offsets for simple policies - no broker calls needed
+            OffsetPolicy::Latest => Ok(Offset::End),
+            OffsetPolicy::Earliest => Ok(Offset::Beginning),
+            OffsetPolicy::Committed => Ok(Offset::Stored),
+            // Time-based policies need to resolve to actual offsets
             OffsetPolicy::RelativeTime { ms } => {
                 let now_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -225,7 +191,7 @@ impl ConsumerManager {
         partition: i32,
         timestamp_ms: i64,
         timeout: Duration,
-    ) -> Result<i64, String> {
+    ) -> Result<Offset, String> {
         let mut tpl = TopicPartitionList::new();
         tpl.add_partition_offset(topic, partition, Offset::Offset(timestamp_ms))
             .map_err(|e| e.to_string())?;
@@ -236,13 +202,10 @@ impl ConsumerManager {
 
         if let Some(elem) = result.elements().first() {
             match elem.offset() {
-                Offset::Offset(o) => Ok(o),
+                Offset::Offset(o) => Ok(Offset::Offset(o)),
                 _ => {
-                    // Timestamp is beyond available data, use high watermark
-                    let (_, high) = consumer
-                        .fetch_watermarks(topic, partition, timeout)
-                        .map_err(|e| e.to_string())?;
-                    Ok(high)
+                    // Timestamp is beyond available data, start from end
+                    Ok(Offset::End)
                 }
             }
         } else {
