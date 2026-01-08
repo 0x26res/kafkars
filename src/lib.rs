@@ -100,7 +100,8 @@ fn partition_state_schema() -> Schema {
     Schema::new(vec![
         Field::new("topic", DataType::Utf8, false),
         Field::new("partition", DataType::Int32, false),
-        Field::new("start_offset", DataType::Int64, true),
+        Field::new("start_offset", DataType::Int64, false),
+        Field::new("end_offset", DataType::Int64, false),
         Field::new("current_offset", DataType::Int64, false),
         Field::new("last_message_timestamp", timestamp_ms_type(), true),
         Field::new("cutoff", timestamp_ms_type(), false),
@@ -185,6 +186,7 @@ impl PyConsumerManager {
 
     fn partition_state<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let partition_info = self.manager.partition_info();
+        let start_offsets_map = self.manager.start_offsets();
         let cutoff = self.manager.cutoff_ms();
 
         let mut sorted_partitions: Vec<_> = partition_info.values().collect();
@@ -192,8 +194,22 @@ impl PyConsumerManager {
 
         let topics: Vec<&str> = sorted_partitions.iter().map(|p| p.topic.as_str()).collect();
         let partition_ids: Vec<i32> = sorted_partitions.iter().map(|p| p.partition).collect();
-        let start_offsets: Vec<Option<i64>> =
-            sorted_partitions.iter().map(|p| p.start_offset).collect();
+        let start_offsets: Vec<i64> = sorted_partitions
+            .iter()
+            .map(|p| {
+                start_offsets_map
+                    .get_start_offset(&p.topic, p.partition)
+                    .unwrap_or(0)
+            })
+            .collect();
+        let end_offsets: Vec<i64> = sorted_partitions
+            .iter()
+            .map(|p| {
+                start_offsets_map
+                    .get_end_offset(&p.topic, p.partition)
+                    .unwrap_or(0)
+            })
+            .collect();
         let current_offsets: Vec<i64> =
             sorted_partitions.iter().map(|p| p.current_offset).collect();
         let last_timestamps: Vec<Option<i64>> =
@@ -207,6 +223,7 @@ impl PyConsumerManager {
                 Arc::new(StringArray::from(topics)),
                 Arc::new(Int32Array::from(partition_ids)),
                 Arc::new(Int64Array::from(start_offsets)),
+                Arc::new(Int64Array::from(end_offsets)),
                 Arc::new(Int64Array::from(current_offsets)),
                 Arc::new(TimestampMillisecondArray::from(last_timestamps).with_timezone("UTC")),
                 Arc::new(TimestampMillisecondArray::from(cutoffs).with_timezone("UTC")),

@@ -4,27 +4,69 @@ use rdkafka::message::{BorrowedMessage, Message};
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::TopicPartitionList;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::source_topic::{OffsetPolicy, SourceTopic};
+
+/// Immutable record of the resolved offsets for a partition at creation time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PartitionStartOffset {
+    pub topic: String,
+    pub partition: i32,
+    /// The resolved start offset based on the topic's offset policy.
+    pub start_offset: i64,
+    /// The high watermark (end offset) at the time of resolution.
+    pub end_offset: i64,
+}
+
+/// Immutable collection of start offsets resolved at consumer creation time.
+#[derive(Debug, Clone)]
+pub struct StartOffsets {
+    offsets: Arc<Vec<PartitionStartOffset>>,
+}
+
+impl StartOffsets {
+    fn new(offsets: Vec<PartitionStartOffset>) -> Self {
+        Self {
+            offsets: Arc::new(offsets),
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &PartitionStartOffset> {
+        self.offsets.iter()
+    }
+
+    pub fn get(&self, topic: &str, partition: i32) -> Option<&PartitionStartOffset> {
+        self.offsets
+            .iter()
+            .find(|o| o.topic == topic && o.partition == partition)
+    }
+
+    pub fn get_start_offset(&self, topic: &str, partition: i32) -> Option<i64> {
+        self.get(topic, partition).map(|o| o.start_offset)
+    }
+
+    pub fn get_end_offset(&self, topic: &str, partition: i32) -> Option<i64> {
+        self.get(topic, partition).map(|o| o.end_offset)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct PartitionInfo {
     pub topic: String,
     pub partition: i32,
-    pub start_offset: Option<i64>,
     pub current_offset: i64,
     pub timestamp_ms: Option<i64>,
     pub is_live: bool,
 }
 
 impl PartitionInfo {
-    pub fn new(topic: String, partition: i32) -> Self {
+    pub fn new(topic: String, partition: i32, start_offset: i64) -> Self {
         Self {
             topic,
             partition,
-            start_offset: None,
-            current_offset: 0,
+            current_offset: start_offset,
             timestamp_ms: None,
             is_live: false,
         }
@@ -61,6 +103,7 @@ impl ConsumerMetrics {
 pub struct ConsumerManager {
     consumer: BaseConsumer,
     topic_names: Vec<String>,
+    start_offsets: StartOffsets,
     cutoff_ms: i64,
     partition_info: HashMap<(String, i32), PartitionInfo>,
     held_messages: VecDeque<TimestampedMessage>,
@@ -72,17 +115,29 @@ pub struct ConsumerManager {
 }
 
 impl ConsumerManager {
-    pub fn new(
+    fn new(
         consumer: BaseConsumer,
         topic_names: Vec<String>,
+        start_offsets: StartOffsets,
         cutoff_ms: i64,
         batch_size: usize,
     ) -> Self {
+        // Initialize partition_info from start_offsets
+        let partition_info = start_offsets
+            .iter()
+            .map(|so| {
+                let key = (so.topic.clone(), so.partition);
+                let info = PartitionInfo::new(so.topic.clone(), so.partition, so.start_offset);
+                (key, info)
+            })
+            .collect();
+
         Self {
             consumer,
             topic_names,
+            start_offsets,
             cutoff_ms,
-            partition_info: HashMap::new(),
+            partition_info,
             held_messages: VecDeque::new(),
             batch_size,
             max_held_messages: batch_size * 5,
@@ -112,13 +167,16 @@ impl ConsumerManager {
         }
         let consumer: BaseConsumer = client_config.create().map_err(|e| e.to_string())?;
 
-        let mut tpl = TopicPartitionList::new();
-        let timeout = Duration::from_secs(10);
+        let mut resolved_offsets: Vec<PartitionStartOffset> = Vec::new();
+        let metadata_timeout = Duration::from_secs(10);
+        let watermark_timeout = Duration::from_secs(5);
+
+        // First pass: collect all topic/partition metadata
+        let mut partitions_to_resolve: Vec<(String, i32, OffsetPolicy)> = Vec::new();
 
         for source_topic in &source_topics {
-            // Fetch metadata for each topic explicitly
             let metadata = consumer
-                .fetch_metadata(Some(&source_topic.name), timeout)
+                .fetch_metadata(Some(&source_topic.name), metadata_timeout)
                 .map_err(|e| {
                     format!(
                         "failed to fetch metadata for '{}': {}",
@@ -137,52 +195,107 @@ impl ConsumerManager {
             }
 
             for partition in topic_metadata.partitions() {
-                let offset = Self::resolve_offset(
-                    &consumer,
-                    &source_topic.name,
+                partitions_to_resolve.push((
+                    source_topic.name.clone(),
                     partition.id(),
-                    &source_topic.offset_policy,
-                    timeout,
-                )?;
-                tpl.add_partition_offset(&source_topic.name, partition.id(), offset)
-                    .map_err(|e| e.to_string())?;
+                    source_topic.offset_policy.clone(),
+                ));
             }
+        }
+
+        // Second pass: resolve offsets for each partition
+        for (topic, partition, policy) in partitions_to_resolve {
+            let (start_offset, end_offset) =
+                Self::resolve_offsets(&consumer, &topic, partition, &policy, watermark_timeout)?;
+            resolved_offsets.push(PartitionStartOffset {
+                topic,
+                partition,
+                start_offset,
+                end_offset,
+            });
+        }
+
+        // Build topic partition list from resolved offsets
+        let mut tpl = TopicPartitionList::new();
+        for pso in &resolved_offsets {
+            tpl.add_partition_offset(&pso.topic, pso.partition, Offset::Offset(pso.start_offset))
+                .map_err(|e| e.to_string())?;
         }
 
         consumer.assign(&tpl).map_err(|e| e.to_string())?;
 
         let topic_names = source_topics.into_iter().map(|t| t.name).collect();
-        Ok(Self::new(consumer, topic_names, cutoff_ms, batch_size))
+        let start_offsets = StartOffsets::new(resolved_offsets);
+        Ok(Self::new(
+            consumer,
+            topic_names,
+            start_offsets,
+            cutoff_ms,
+            batch_size,
+        ))
     }
 
-    fn resolve_offset(
+    /// Resolves the start offset based on policy and fetches the end offset (high watermark).
+    /// Returns (start_offset, end_offset).
+    fn resolve_offsets(
         consumer: &BaseConsumer,
         topic: &str,
         partition: i32,
         policy: &OffsetPolicy,
         timeout: Duration,
-    ) -> Result<Offset, String> {
-        match policy {
-            // Use symbolic offsets for simple policies - no broker calls needed
-            OffsetPolicy::Latest => Ok(Offset::End),
-            OffsetPolicy::Earliest => Ok(Offset::Beginning),
-            OffsetPolicy::Committed => Ok(Offset::Stored),
-            // Time-based policies need to resolve to actual offsets
+    ) -> Result<(i64, i64), String> {
+        // Always fetch watermarks to get the end offset
+        let (low, high) = consumer
+            .fetch_watermarks(topic, partition, timeout)
+            .map_err(|e| {
+                format!(
+                    "failed to fetch watermarks for {}:{}: {}",
+                    topic, partition, e
+                )
+            })?;
+
+        let start_offset = match policy {
+            OffsetPolicy::Latest => high,
+            OffsetPolicy::Earliest => low,
+            OffsetPolicy::Committed => {
+                let mut tpl = TopicPartitionList::new();
+                tpl.add_partition(topic, partition);
+                let committed = consumer.committed_offsets(tpl, timeout).map_err(|e| {
+                    format!(
+                        "failed to fetch committed offset for {}:{}: {}",
+                        topic, partition, e
+                    )
+                })?;
+
+                if let Some(elem) = committed.elements().first() {
+                    match elem.offset() {
+                        Offset::Offset(o) => o,
+                        _ => low, // No committed offset, fall back to earliest
+                    }
+                } else {
+                    return Err(format!(
+                        "failed to get committed offset for {}:{}",
+                        topic, partition
+                    ));
+                }
+            }
             OffsetPolicy::RelativeTime { ms } => {
                 let now_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_err(|e| e.to_string())?
                     .as_millis() as i64;
                 let target_ms = now_ms - ms;
-                Self::offset_for_timestamp(consumer, topic, partition, target_ms, timeout)
+                Self::offset_for_timestamp(consumer, topic, partition, target_ms, high, timeout)?
             }
             OffsetPolicy::AbsoluteTime { ms } => {
-                Self::offset_for_timestamp(consumer, topic, partition, *ms, timeout)
+                Self::offset_for_timestamp(consumer, topic, partition, *ms, high, timeout)?
             }
             OffsetPolicy::StartOfDay { time_ms, .. } => {
-                Self::offset_for_timestamp(consumer, topic, partition, *time_ms, timeout)
+                Self::offset_for_timestamp(consumer, topic, partition, *time_ms, high, timeout)?
             }
-        }
+        };
+
+        Ok((start_offset, high))
     }
 
     fn offset_for_timestamp(
@@ -190,22 +303,26 @@ impl ConsumerManager {
         topic: &str,
         partition: i32,
         timestamp_ms: i64,
+        high_watermark: i64,
         timeout: Duration,
-    ) -> Result<Offset, String> {
+    ) -> Result<i64, String> {
         let mut tpl = TopicPartitionList::new();
         tpl.add_partition_offset(topic, partition, Offset::Offset(timestamp_ms))
             .map_err(|e| e.to_string())?;
 
-        let result = consumer
-            .offsets_for_times(tpl, timeout)
-            .map_err(|e| e.to_string())?;
+        let result = consumer.offsets_for_times(tpl, timeout).map_err(|e| {
+            format!(
+                "failed to resolve offset for timestamp {} on {}:{}: {}",
+                timestamp_ms, topic, partition, e
+            )
+        })?;
 
         if let Some(elem) = result.elements().first() {
             match elem.offset() {
-                Offset::Offset(o) => Ok(Offset::Offset(o)),
+                Offset::Offset(o) => Ok(o),
                 _ => {
-                    // Timestamp is beyond available data, start from end
-                    Ok(Offset::End)
+                    // Timestamp is beyond available data, use high watermark
+                    Ok(high_watermark)
                 }
             }
         } else {
@@ -274,17 +391,20 @@ impl ConsumerManager {
 
     fn update_partition_info(&mut self, msg: &TimestampedMessage) {
         let key = (msg.topic.clone(), msg.partition);
-        let info = self
-            .partition_info
-            .entry(key)
-            .or_insert_with(|| PartitionInfo::new(msg.topic.clone(), msg.partition));
-
-        if info.start_offset.is_none() {
-            info.start_offset = Some(msg.offset);
+        if let Some(info) = self.partition_info.get_mut(&key) {
+            info.current_offset = msg.offset;
+            info.timestamp_ms = Some(msg.timestamp_ms);
+            // A partition is live if either:
+            // 1. Message timestamp is >= cutoff time, OR
+            // 2. We've reached the end offset captured at creation time
+            let end_offset = self
+                .start_offsets
+                .get_end_offset(&msg.topic, msg.partition)
+                .unwrap_or(i64::MAX);
+            // offset is 0-indexed, end_offset is the next offset to be written
+            // so we're caught up when current_offset + 1 >= end_offset
+            info.is_live = msg.timestamp_ms >= self.cutoff_ms || (msg.offset + 1) >= end_offset;
         }
-        info.current_offset = msg.offset;
-        info.timestamp_ms = Some(msg.timestamp_ms);
-        info.is_live = msg.timestamp_ms >= self.cutoff_ms;
     }
 
     fn update_low_water_mark(&mut self) {
@@ -395,6 +515,10 @@ impl ConsumerManager {
         &self.partition_info
     }
 
+    pub fn start_offsets(&self) -> &StartOffsets {
+        &self.start_offsets
+    }
+
     pub fn cutoff_ms(&self) -> i64 {
         self.cutoff_ms
     }
@@ -406,13 +530,37 @@ mod tests {
 
     #[test]
     fn test_partition_info_new() {
-        let info = PartitionInfo::new("test-topic".to_string(), 0);
+        let info = PartitionInfo::new("test-topic".to_string(), 0, 100);
         assert_eq!(info.topic, "test-topic");
         assert_eq!(info.partition, 0);
-        assert!(info.start_offset.is_none());
-        assert_eq!(info.current_offset, 0);
+        assert_eq!(info.current_offset, 100);
         assert!(info.timestamp_ms.is_none());
         assert!(!info.is_live);
+    }
+
+    #[test]
+    fn test_start_offsets() {
+        let offsets = StartOffsets::new(vec![
+            PartitionStartOffset {
+                topic: "topic_1".to_string(),
+                partition: 0,
+                start_offset: 100,
+                end_offset: 500,
+            },
+            PartitionStartOffset {
+                topic: "topic_1".to_string(),
+                partition: 1,
+                start_offset: 200,
+                end_offset: 600,
+            },
+        ]);
+
+        assert_eq!(offsets.get_start_offset("topic_1", 0), Some(100));
+        assert_eq!(offsets.get_start_offset("topic_1", 1), Some(200));
+        assert_eq!(offsets.get_end_offset("topic_1", 0), Some(500));
+        assert_eq!(offsets.get_end_offset("topic_1", 1), Some(600));
+        assert_eq!(offsets.get("topic_1", 2), None);
+        assert_eq!(offsets.get("topic_2", 0), None);
     }
 
     #[test]
