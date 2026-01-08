@@ -4,7 +4,6 @@ requires = [ "maturin>=1.7,<2" ]
 
 [project]
 name = "kafkars"
-version = "0.1.0"
 description = "Rust based, Arrow powered, python kafka client"
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -17,6 +16,7 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
 ]
+dynamic = [ "version" ]
 dependencies = [ "pyarrow>=14" ]
 
 [dependency-groups]

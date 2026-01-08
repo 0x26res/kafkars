@@ -150,7 +150,6 @@ wheels = [
 
 [[package]]
 name = "kafkars"
-version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "pyarrow" },
@@ -176,7 +175,7 @@ dev = [
     { name = "maturin" },
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "pytest", specifier = ">=8" },
-    { name = "tabulate", specifier = ">=0.9.0" },
+    { name = "tabulate", specifier = ">=0.9" },
     { name = "ty" },
     { name = "typer", specifier = ">=0.9" },
 ]
