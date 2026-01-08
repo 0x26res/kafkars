@@ -76,6 +76,9 @@ def poll(
     max_batches: Optional[int] = typer.Option(
         None, "--max-batches", "-n", help="Maximum number of batches to consume"
     ),
+    batch_size: int = typer.Option(
+        1000, "--batch-size", "-b", help="Maximum messages per batch"
+    ),
 ) -> None:
     """Poll messages from Kafka topics and display them as markdown tables."""
     from kafkars import ConsumerManager
@@ -93,7 +96,6 @@ def poll(
     # Create consumer manager
     # Using a far-future cutoff to avoid stopping early
     cutoff_ms = 2**62
-    batch_size = 1000
 
     typer.echo(f"Connecting to {bootstrap_servers}...")
     for topic_spec in topics:

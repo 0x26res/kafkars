@@ -3,7 +3,7 @@ use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::{BorrowedMessage, Message};
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::TopicPartitionList;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -106,7 +106,7 @@ pub struct ConsumerManager {
     start_offsets: StartOffsets,
     cutoff_ms: i64,
     partition_info: HashMap<(String, i32), PartitionInfo>,
-    held_messages: VecDeque<TimestampedMessage>,
+    held_messages: Vec<TimestampedMessage>,
     batch_size: usize,
     max_held_messages: usize,
     low_water_mark_ms: Option<i64>,
@@ -138,7 +138,7 @@ impl ConsumerManager {
             start_offsets,
             cutoff_ms,
             partition_info,
-            held_messages: VecDeque::new(),
+            held_messages: Vec::new(),
             batch_size,
             max_held_messages: batch_size * 5,
             low_water_mark_ms: None,
@@ -345,6 +345,9 @@ impl ConsumerManager {
         // Message received, keep polling with zero timeout to batch messages
         while self.held_messages.len() < self.max_held_messages && self.poll_one(Duration::ZERO)? {}
 
+        // Sort held messages by timestamp for ordered release
+        self.held_messages.sort_by_key(|m| m.timestamp_ms);
+
         self.update_low_water_mark();
         self.manage_paused_partitions();
         Ok(self.release_messages())
@@ -359,7 +362,7 @@ impl ConsumerManager {
                 Ok(msg) => {
                     if let Some(timestamped) = Self::extract_message(&msg) {
                         self.update_partition_info(&timestamped);
-                        self.held_messages.push_back(timestamped);
+                        self.held_messages.push(timestamped);
                         self.metrics.messages_consumed += 1;
                         return Ok(true);
                     }
@@ -427,20 +430,17 @@ impl ConsumerManager {
 
     fn release_messages(&mut self) -> Vec<TimestampedMessage> {
         let limit = self.get_limit();
-        let mut released = Vec::new();
 
-        while let Some(msg) = self.held_messages.front() {
-            if msg.timestamp_ms <= limit {
-                if let Some(msg) = self.held_messages.pop_front() {
-                    released.push(msg);
-                    self.metrics.messages_released += 1;
-                }
-            } else {
-                break;
-            }
-        }
+        // Find how many messages to release (up to batch_size, with timestamp <= limit)
+        let release_count = self
+            .held_messages
+            .iter()
+            .take(self.batch_size)
+            .take_while(|m| m.timestamp_ms <= limit)
+            .count();
 
-        released
+        self.metrics.messages_released += release_count as u64;
+        self.held_messages.drain(0..release_count).collect()
     }
 
     fn manage_paused_partitions(&mut self) {
