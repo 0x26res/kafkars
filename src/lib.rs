@@ -267,8 +267,12 @@ fn get_partition_state_schema(py: Python<'_>) -> PyResult<Py<PyAny>> {
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
 }
 
+/// Version from Cargo.toml, set at compile time.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[pymodule]
 fn _lib(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add("__version__", VERSION)?;
     m.add_class::<PyConsumerManager>()?;
     m.add_function(wrap_pyfunction!(validate_source_topic, m)?)?;
     m.add_function(wrap_pyfunction!(get_message_schema, m)?)?;
