@@ -1,11 +1,16 @@
 # kafkars
 
 [![PyPI](https://img.shields.io/pypi/v/kafkars.svg)](https://pypi.org/project/kafkars/)
+[![Downloads](https://img.shields.io/pypi/dm/kafkars.svg)](https://pypi.org/project/kafkars/)
+[![Python](https://img.shields.io/pypi/pyversions/kafkars.svg)](https://pypi.org/project/kafkars/)
+[![License](https://img.shields.io/pypi/l/kafkars.svg)](https://github.com/0x26res/kafkars/blob/main/LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/0x26res/kafkars?style=social)](https://github.com/0x26res/kafkars)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![GitHub repo size](https://img.shields.io/github/repo-size/0x26res/kafkars)](https://github.com/0x26res/kafkars)
+[![GitHub issues](https://img.shields.io/github/issues/0x26res/kafkars)](https://github.com/0x26res/kafkars/issues)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/0x26res/kafkars/pulls)
 [![Rust](https://img.shields.io/badge/rust-%23000000.svg?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Apache Arrow](https://img.shields.io/badge/Apache%20Arrow-powered-orange.svg)](https://arrow.apache.org/)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
 Rust-based, Arrow-powered Python Kafka client for high-throughput data pipelines.
 
