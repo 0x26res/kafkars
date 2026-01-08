@@ -33,6 +33,7 @@ repos:
       - id: markdownlint
         args:
           - "--fix"
+          - "--disable=MD013"
   - repo: https://github.com/astral-sh/uv-pre-commit
     rev: 0.9.21
     hooks:

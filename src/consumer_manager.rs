@@ -426,17 +426,27 @@ impl ConsumerManager {
     }
 
     fn update_low_water_mark(&mut self) {
-        let non_live_timestamps: Vec<i64> = self
+        // Only consider partitions that are:
+        // 1. Not live (still replaying)
+        // 2. Not paused (actively consuming)
+        // Paused partitions have already contributed their messages to the buffer,
+        // so they shouldn't block release of messages from active partitions.
+        let active_replay_timestamps: Vec<i64> = self
             .partition_info
             .values()
-            .filter(|p| !p.is_live)
+            .filter(|p| !p.is_live && !p.is_paused)
             .filter_map(|p| p.timestamp_ms)
             .collect();
 
-        self.low_water_mark_ms = non_live_timestamps.into_iter().min();
+        self.low_water_mark_ms = active_replay_timestamps.into_iter().min();
     }
 
     fn get_limit(&self) -> i64 {
+        // If all partitions are live, release all messages (no timestamp limit)
+        if self.is_live() {
+            return i64::MAX;
+        }
+
         match self.low_water_mark_ms {
             Some(lwm) => lwm.min(self.cutoff_ms),
             None => self.cutoff_ms,
@@ -472,9 +482,31 @@ impl ConsumerManager {
     fn manage_paused_partitions(&mut self) {
         if self.held_messages.len() > self.max_held_messages {
             self.pause_ahead_partitions();
-        } else if self.paused_count > 0 && self.held_messages.len() < self.batch_size {
+        } else if self.paused_count > 0 && self.should_resume() {
             self.resume_all_partitions();
         }
+    }
+
+    /// Determines whether paused partitions should be resumed.
+    /// Resume when:
+    /// 1. Buffer has drained below batch_size, OR
+    /// 2. All non-paused partitions are live (no progress can be made without resuming)
+    fn should_resume(&self) -> bool {
+        // Resume if buffer is low enough
+        if self.held_messages.len() < self.batch_size {
+            return true;
+        }
+
+        // Resume if all non-paused partitions are live - this means the slow
+        // partition has caught up and we can't make progress without resuming
+        // the paused partitions
+        let all_active_partitions_live = self
+            .partition_info
+            .values()
+            .filter(|p| !p.is_paused)
+            .all(|p| p.is_live);
+
+        all_active_partitions_live
     }
 
     fn pause_ahead_partitions(&mut self) {
