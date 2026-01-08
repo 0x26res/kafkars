@@ -106,10 +106,6 @@ Each poll returns a RecordBatch with the following schema:
 | `from_relative_time(topic, ms)` | Start from N milliseconds ago          |
 | `from_absolute_time(topic, ms)` | Start from specific Unix timestamp     |
 
-## Architecture
-
-See [docs/architecture.md](docs/architecture.md) for detailed design documentation.
-
 ## License
 
 Apache 2.0
