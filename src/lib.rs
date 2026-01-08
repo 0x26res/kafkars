@@ -238,9 +238,29 @@ impl PyConsumerManager {
     }
 }
 
+#[pyfunction]
+fn get_message_schema(py: Python<'_>) -> PyResult<Py<PyAny>> {
+    let schema = message_schema();
+    schema
+        .to_pyarrow(py)
+        .map(|bound| bound.unbind())
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+}
+
+#[pyfunction]
+fn get_partition_state_schema(py: Python<'_>) -> PyResult<Py<PyAny>> {
+    let schema = partition_state_schema();
+    schema
+        .to_pyarrow(py)
+        .map(|bound| bound.unbind())
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+}
+
 #[pymodule]
 fn _lib(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyConsumerManager>()?;
     m.add_function(wrap_pyfunction!(validate_source_topic, m)?)?;
+    m.add_function(wrap_pyfunction!(get_message_schema, m)?)?;
+    m.add_function(wrap_pyfunction!(get_partition_state_schema, m)?)?;
     Ok(())
 }
