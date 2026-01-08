@@ -56,9 +56,16 @@ impl StartOffsets {
 pub struct PartitionInfo {
     pub topic: String,
     pub partition: i32,
-    pub current_offset: i64,
+    /// Offset of last message consumed from Kafka.
+    pub consumed_offset: i64,
+    /// Offset of last message released via poll.
+    pub released_offset: i64,
+    /// Timestamp of last consumed message.
     pub timestamp_ms: Option<i64>,
+    /// Whether this partition has caught up to replay_end_offset or cutoff.
     pub is_live: bool,
+    /// Whether this partition is currently paused due to backpressure.
+    pub is_paused: bool,
 }
 
 impl PartitionInfo {
@@ -66,9 +73,11 @@ impl PartitionInfo {
         Self {
             topic,
             partition,
-            current_offset: start_offset,
+            consumed_offset: start_offset,
+            released_offset: start_offset,
             timestamp_ms: None,
             is_live: false,
+            is_paused: false,
         }
     }
 }
@@ -400,7 +409,7 @@ impl ConsumerManager {
     fn update_partition_info(&mut self, msg: &TimestampedMessage) {
         let key = (msg.topic.clone(), msg.partition);
         if let Some(info) = self.partition_info.get_mut(&key) {
-            info.current_offset = msg.offset;
+            info.consumed_offset = msg.offset;
             info.timestamp_ms = Some(msg.timestamp_ms);
             // A partition is live if either:
             // 1. Message timestamp is >= cutoff time, OR
@@ -446,7 +455,18 @@ impl ConsumerManager {
             .count();
 
         self.metrics.messages_released += release_count as u64;
-        self.held_messages.drain(0..release_count).collect()
+        let released: Vec<TimestampedMessage> =
+            self.held_messages.drain(0..release_count).collect();
+
+        // Update released_offset for each partition
+        for msg in &released {
+            let key = (msg.topic.clone(), msg.partition);
+            if let Some(info) = self.partition_info.get_mut(&key) {
+                info.released_offset = msg.offset;
+            }
+        }
+
+        released
     }
 
     fn manage_paused_partitions(&mut self) {
@@ -463,11 +483,13 @@ impl ConsumerManager {
         };
 
         let mut to_pause = TopicPartitionList::new();
+        let mut partitions_to_pause: Vec<(String, i32)> = Vec::new();
 
         for info in self.partition_info.values() {
             if let Some(ts) = info.timestamp_ms {
-                if ts > lwm {
+                if ts > lwm && !info.is_paused {
                     to_pause.add_partition(&info.topic, info.partition);
+                    partitions_to_pause.push((info.topic.clone(), info.partition));
                 }
             }
         }
@@ -476,6 +498,12 @@ impl ConsumerManager {
             if let Err(e) = self.consumer.pause(&to_pause) {
                 eprintln!("Error pausing partitions: {}", e);
             } else {
+                // Mark partitions as paused
+                for (topic, partition) in partitions_to_pause {
+                    if let Some(info) = self.partition_info.get_mut(&(topic, partition)) {
+                        info.is_paused = true;
+                    }
+                }
                 self.paused_count += to_pause.count();
                 self.metrics.partitions_paused += to_pause.count() as u64;
             }
@@ -487,6 +515,10 @@ impl ConsumerManager {
             if let Err(e) = self.consumer.resume(&assignment) {
                 eprintln!("Error resuming partitions: {}", e);
             } else {
+                // Mark all partitions as not paused
+                for info in self.partition_info.values_mut() {
+                    info.is_paused = false;
+                }
                 self.metrics.partitions_resumed += self.paused_count as u64;
                 self.paused_count = 0;
             }
@@ -539,7 +571,9 @@ mod tests {
         let info = PartitionInfo::new("test-topic".to_string(), 0, 100);
         assert_eq!(info.topic, "test-topic");
         assert_eq!(info.partition, 0);
-        assert_eq!(info.current_offset, 100);
+        assert_eq!(info.consumed_offset, 100);
+        assert_eq!(info.released_offset, 100);
+        assert!(!info.is_paused);
         assert!(info.timestamp_ms.is_none());
         assert!(!info.is_live);
     }
