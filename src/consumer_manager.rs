@@ -15,9 +15,9 @@ pub struct PartitionStartOffset {
     pub topic: String,
     pub partition: i32,
     /// The resolved start offset based on the topic's offset policy.
-    pub start_offset: i64,
+    pub replay_start_offset: i64,
     /// The high watermark (end offset) at the time of resolution.
-    pub end_offset: i64,
+    pub replay_end_offset: i64,
 }
 
 /// Immutable collection of start offsets resolved at consumer creation time.
@@ -43,12 +43,12 @@ impl StartOffsets {
             .find(|o| o.topic == topic && o.partition == partition)
     }
 
-    pub fn get_start_offset(&self, topic: &str, partition: i32) -> Option<i64> {
-        self.get(topic, partition).map(|o| o.start_offset)
+    pub fn get_replay_start_offset(&self, topic: &str, partition: i32) -> Option<i64> {
+        self.get(topic, partition).map(|o| o.replay_start_offset)
     }
 
-    pub fn get_end_offset(&self, topic: &str, partition: i32) -> Option<i64> {
-        self.get(topic, partition).map(|o| o.end_offset)
+    pub fn get_replay_end_offset(&self, topic: &str, partition: i32) -> Option<i64> {
+        self.get(topic, partition).map(|o| o.replay_end_offset)
     }
 }
 
@@ -127,7 +127,8 @@ impl ConsumerManager {
             .iter()
             .map(|so| {
                 let key = (so.topic.clone(), so.partition);
-                let info = PartitionInfo::new(so.topic.clone(), so.partition, so.start_offset);
+                let info =
+                    PartitionInfo::new(so.topic.clone(), so.partition, so.replay_start_offset);
                 (key, info)
             })
             .collect();
@@ -205,21 +206,25 @@ impl ConsumerManager {
 
         // Second pass: resolve offsets for each partition
         for (topic, partition, policy) in partitions_to_resolve {
-            let (start_offset, end_offset) =
+            let (replay_start_offset, replay_end_offset) =
                 Self::resolve_offsets(&consumer, &topic, partition, &policy, watermark_timeout)?;
             resolved_offsets.push(PartitionStartOffset {
                 topic,
                 partition,
-                start_offset,
-                end_offset,
+                replay_start_offset,
+                replay_end_offset,
             });
         }
 
         // Build topic partition list from resolved offsets
         let mut tpl = TopicPartitionList::new();
         for pso in &resolved_offsets {
-            tpl.add_partition_offset(&pso.topic, pso.partition, Offset::Offset(pso.start_offset))
-                .map_err(|e| e.to_string())?;
+            tpl.add_partition_offset(
+                &pso.topic,
+                pso.partition,
+                Offset::Offset(pso.replay_start_offset),
+            )
+            .map_err(|e| e.to_string())?;
         }
 
         consumer.assign(&tpl).map_err(|e| e.to_string())?;
@@ -400,13 +405,14 @@ impl ConsumerManager {
             // A partition is live if either:
             // 1. Message timestamp is >= cutoff time, OR
             // 2. We've reached the end offset captured at creation time
-            let end_offset = self
+            let replay_end_offset = self
                 .start_offsets
-                .get_end_offset(&msg.topic, msg.partition)
+                .get_replay_end_offset(&msg.topic, msg.partition)
                 .unwrap_or(i64::MAX);
-            // offset is 0-indexed, end_offset is the next offset to be written
-            // so we're caught up when current_offset + 1 >= end_offset
-            info.is_live = msg.timestamp_ms >= self.cutoff_ms || (msg.offset + 1) >= end_offset;
+            // offset is 0-indexed, replay_end_offset is the next offset to be written
+            // so we're caught up when current_offset + 1 >= replay_end_offset
+            info.is_live =
+                msg.timestamp_ms >= self.cutoff_ms || (msg.offset + 1) >= replay_end_offset;
         }
     }
 
@@ -544,21 +550,21 @@ mod tests {
             PartitionStartOffset {
                 topic: "topic_1".to_string(),
                 partition: 0,
-                start_offset: 100,
-                end_offset: 500,
+                replay_start_offset: 100,
+                replay_end_offset: 500,
             },
             PartitionStartOffset {
                 topic: "topic_1".to_string(),
                 partition: 1,
-                start_offset: 200,
-                end_offset: 600,
+                replay_start_offset: 200,
+                replay_end_offset: 600,
             },
         ]);
 
-        assert_eq!(offsets.get_start_offset("topic_1", 0), Some(100));
-        assert_eq!(offsets.get_start_offset("topic_1", 1), Some(200));
-        assert_eq!(offsets.get_end_offset("topic_1", 0), Some(500));
-        assert_eq!(offsets.get_end_offset("topic_1", 1), Some(600));
+        assert_eq!(offsets.get_replay_start_offset("topic_1", 0), Some(100));
+        assert_eq!(offsets.get_replay_start_offset("topic_1", 1), Some(200));
+        assert_eq!(offsets.get_replay_end_offset("topic_1", 0), Some(500));
+        assert_eq!(offsets.get_replay_end_offset("topic_1", 1), Some(600));
         assert_eq!(offsets.get("topic_1", 2), None);
         assert_eq!(offsets.get("topic_2", 0), None);
     }

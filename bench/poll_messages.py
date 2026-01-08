@@ -79,6 +79,9 @@ def poll(
     batch_size: int = typer.Option(
         1000, "--batch-size", "-b", help="Maximum messages per batch"
     ),
+    show_state: bool = typer.Option(
+        False, "--show-state", "-s", help="Show partition state after each poll"
+    ),
 ) -> None:
     """Poll messages from Kafka topics and display them as markdown tables."""
     from kafkars import ConsumerManager
@@ -113,7 +116,13 @@ def poll(
 
             if batch.num_rows > 0:
                 print(f"\n{batch.to_pandas().to_markdown()}")
-                print(f"\n*{batch.num_rows} message(s) received*\n")
+                print(f"\n*{batch.num_rows} message(s) received*")
+
+                if show_state:
+                    state = manager.partition_state()
+                    print(f"\n**Partition State:**\n{state.to_pandas().to_markdown()}")
+
+                print()
                 batch_count += 1
                 total_messages += batch.num_rows
 

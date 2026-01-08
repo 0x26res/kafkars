@@ -41,8 +41,8 @@ def test_partition_state_schema_fields():
     assert field_names == [
         "topic",
         "partition",
-        "start_offset",
-        "end_offset",
+        "replay_start_offset",
+        "replay_end_offset",
         "current_offset",
         "last_message_timestamp",
         "cutoff",
