@@ -82,6 +82,54 @@ impl PartitionInfo {
     }
 }
 
+// --- Pure helper functions for pause/resume logic (testable without Kafka) ---
+
+/// Calculate the low water mark from partition info.
+/// Only considers partitions that are not live and not paused.
+pub fn calculate_low_water_mark<'a>(
+    partitions: impl Iterator<Item = &'a PartitionInfo>,
+) -> Option<i64> {
+    partitions
+        .filter(|p| !p.is_live && !p.is_paused)
+        .filter_map(|p| p.timestamp_ms)
+        .min()
+}
+
+/// Determine if paused partitions should be resumed.
+/// Returns true if:
+/// 1. Buffer has drained below batch_size, OR
+/// 2. All non-paused partitions are live (no progress can be made without resuming)
+pub fn should_resume_partitions<'a>(
+    partitions: impl Iterator<Item = &'a PartitionInfo>,
+    held_count: usize,
+    batch_size: usize,
+) -> bool {
+    if held_count < batch_size {
+        return true;
+    }
+
+    // Check if all non-paused partitions are live
+    partitions.filter(|p| !p.is_paused).all(|p| p.is_live)
+}
+
+/// Identify partitions that should be paused based on low water mark.
+/// Returns list of (topic, partition) tuples for partitions to pause.
+pub fn select_partitions_to_pause<'a>(
+    partitions: impl Iterator<Item = &'a PartitionInfo>,
+    low_water_mark: i64,
+) -> Vec<(String, i32)> {
+    partitions
+        .filter(|p| {
+            if let Some(ts) = p.timestamp_ms {
+                ts > low_water_mark && !p.is_paused
+            } else {
+                false
+            }
+        })
+        .map(|p| (p.topic.clone(), p.partition))
+        .collect()
+}
+
 #[derive(Debug, Clone)]
 pub struct TimestampedMessage {
     pub key: Option<Vec<u8>>,
@@ -426,19 +474,7 @@ impl ConsumerManager {
     }
 
     fn update_low_water_mark(&mut self) {
-        // Only consider partitions that are:
-        // 1. Not live (still replaying)
-        // 2. Not paused (actively consuming)
-        // Paused partitions have already contributed their messages to the buffer,
-        // so they shouldn't block release of messages from active partitions.
-        let active_replay_timestamps: Vec<i64> = self
-            .partition_info
-            .values()
-            .filter(|p| !p.is_live && !p.is_paused)
-            .filter_map(|p| p.timestamp_ms)
-            .collect();
-
-        self.low_water_mark_ms = active_replay_timestamps.into_iter().min();
+        self.low_water_mark_ms = calculate_low_water_mark(self.partition_info.values());
     }
 
     fn get_limit(&self) -> i64 {
@@ -487,26 +523,12 @@ impl ConsumerManager {
         }
     }
 
-    /// Determines whether paused partitions should be resumed.
-    /// Resume when:
-    /// 1. Buffer has drained below batch_size, OR
-    /// 2. All non-paused partitions are live (no progress can be made without resuming)
     fn should_resume(&self) -> bool {
-        // Resume if buffer is low enough
-        if self.held_messages.len() < self.batch_size {
-            return true;
-        }
-
-        // Resume if all non-paused partitions are live - this means the slow
-        // partition has caught up and we can't make progress without resuming
-        // the paused partitions
-        let all_active_partitions_live = self
-            .partition_info
-            .values()
-            .filter(|p| !p.is_paused)
-            .all(|p| p.is_live);
-
-        all_active_partitions_live
+        should_resume_partitions(
+            self.partition_info.values(),
+            self.held_messages.len(),
+            self.batch_size,
+        )
     }
 
     fn pause_ahead_partitions(&mut self) {
@@ -514,31 +536,28 @@ impl ConsumerManager {
             return;
         };
 
-        let mut to_pause = TopicPartitionList::new();
-        let mut partitions_to_pause: Vec<(String, i32)> = Vec::new();
+        let partitions_to_pause = select_partitions_to_pause(self.partition_info.values(), lwm);
 
-        for info in self.partition_info.values() {
-            if let Some(ts) = info.timestamp_ms {
-                if ts > lwm && !info.is_paused {
-                    to_pause.add_partition(&info.topic, info.partition);
-                    partitions_to_pause.push((info.topic.clone(), info.partition));
-                }
-            }
+        if partitions_to_pause.is_empty() {
+            return;
         }
 
-        if to_pause.count() > 0 {
-            if let Err(e) = self.consumer.pause(&to_pause) {
-                eprintln!("Error pausing partitions: {}", e);
-            } else {
-                // Mark partitions as paused
-                for (topic, partition) in partitions_to_pause {
-                    if let Some(info) = self.partition_info.get_mut(&(topic, partition)) {
-                        info.is_paused = true;
-                    }
+        let mut to_pause = TopicPartitionList::new();
+        for (topic, partition) in &partitions_to_pause {
+            to_pause.add_partition(topic, *partition);
+        }
+
+        if let Err(e) = self.consumer.pause(&to_pause) {
+            eprintln!("Error pausing partitions: {}", e);
+        } else {
+            // Mark partitions as paused
+            for (topic, partition) in partitions_to_pause {
+                if let Some(info) = self.partition_info.get_mut(&(topic, partition)) {
+                    info.is_paused = true;
                 }
-                self.paused_count += to_pause.count();
-                self.metrics.partitions_paused += to_pause.count() as u64;
             }
+            self.paused_count += to_pause.count();
+            self.metrics.partitions_paused += to_pause.count() as u64;
         }
     }
 
@@ -685,5 +704,183 @@ mod tests {
             ),
             Ok(_) => panic!("expected error for duplicate topics"),
         }
+    }
+
+    // --- Tests for pause/resume helper functions ---
+
+    fn make_partition(
+        topic: &str,
+        partition: i32,
+        timestamp_ms: Option<i64>,
+        is_live: bool,
+        is_paused: bool,
+    ) -> PartitionInfo {
+        PartitionInfo {
+            topic: topic.to_string(),
+            partition,
+            consumed_offset: 0,
+            released_offset: 0,
+            timestamp_ms,
+            is_live,
+            is_paused,
+        }
+    }
+
+    #[test]
+    fn test_calculate_low_water_mark_basic() {
+        let partitions = vec![
+            make_partition("t1", 0, Some(100), false, false),
+            make_partition("t1", 1, Some(200), false, false),
+            make_partition("t1", 2, Some(300), false, false),
+        ];
+
+        let lwm = calculate_low_water_mark(partitions.iter());
+        assert_eq!(lwm, Some(100));
+    }
+
+    #[test]
+    fn test_calculate_low_water_mark_excludes_live() {
+        let partitions = vec![
+            make_partition("t1", 0, Some(100), true, false), // live - excluded
+            make_partition("t1", 1, Some(200), false, false),
+            make_partition("t1", 2, Some(300), false, false),
+        ];
+
+        let lwm = calculate_low_water_mark(partitions.iter());
+        assert_eq!(lwm, Some(200)); // 100 is excluded because partition is live
+    }
+
+    #[test]
+    fn test_calculate_low_water_mark_excludes_paused() {
+        let partitions = vec![
+            make_partition("t1", 0, Some(100), false, true), // paused - excluded
+            make_partition("t1", 1, Some(200), false, false),
+            make_partition("t1", 2, Some(300), false, false),
+        ];
+
+        let lwm = calculate_low_water_mark(partitions.iter());
+        assert_eq!(lwm, Some(200)); // 100 is excluded because partition is paused
+    }
+
+    #[test]
+    fn test_calculate_low_water_mark_all_live() {
+        let partitions = vec![
+            make_partition("t1", 0, Some(100), true, false),
+            make_partition("t1", 1, Some(200), true, false),
+        ];
+
+        let lwm = calculate_low_water_mark(partitions.iter());
+        assert_eq!(lwm, None); // All partitions are live
+    }
+
+    #[test]
+    fn test_calculate_low_water_mark_no_timestamps() {
+        let partitions = vec![
+            make_partition("t1", 0, None, false, false),
+            make_partition("t1", 1, None, false, false),
+        ];
+
+        let lwm = calculate_low_water_mark(partitions.iter());
+        assert_eq!(lwm, None); // No timestamps available
+    }
+
+    #[test]
+    fn test_should_resume_buffer_low() {
+        let partitions = vec![
+            make_partition("t1", 0, Some(100), false, true), // paused
+            make_partition("t1", 1, Some(200), false, false),
+        ];
+
+        // Buffer (50) < batch_size (100) => should resume
+        assert!(should_resume_partitions(partitions.iter(), 50, 100));
+    }
+
+    #[test]
+    fn test_should_resume_buffer_high_not_all_live() {
+        let partitions = vec![
+            make_partition("t1", 0, Some(100), false, true), // paused
+            make_partition("t1", 1, Some(200), false, false), // not paused, not live
+        ];
+
+        // Buffer (150) >= batch_size (100), and non-paused partition is not live => don't resume
+        assert!(!should_resume_partitions(partitions.iter(), 150, 100));
+    }
+
+    #[test]
+    fn test_should_resume_all_active_partitions_live() {
+        let partitions = vec![
+            make_partition("t1", 0, Some(100), false, true), // paused (doesn't count)
+            make_partition("t1", 1, Some(200), true, false), // not paused, live
+        ];
+
+        // Buffer (150) >= batch_size (100), but all non-paused partitions are live => should resume
+        assert!(should_resume_partitions(partitions.iter(), 150, 100));
+    }
+
+    #[test]
+    fn test_should_resume_scenario_from_issue() {
+        // Scenario: A (paused, was far ahead), B (paused), C (active, now caught up/live)
+        let partitions = vec![
+            make_partition("t1", 0, Some(1000), false, true), // A: paused
+            make_partition("t1", 1, Some(800), false, true),  // B: paused
+            make_partition("t1", 2, Some(1000), true, false), // C: active, now live
+        ];
+
+        // Buffer still has 500 messages (>= batch_size 100)
+        // But the only non-paused partition (C) is live
+        // => should resume to make progress
+        assert!(should_resume_partitions(partitions.iter(), 500, 100));
+    }
+
+    #[test]
+    fn test_select_partitions_to_pause_basic() {
+        let partitions = vec![
+            make_partition("t1", 0, Some(100), false, false), // at low water mark
+            make_partition("t1", 1, Some(500), false, false), // ahead
+            make_partition("t1", 2, Some(800), false, false), // further ahead
+        ];
+
+        let to_pause = select_partitions_to_pause(partitions.iter(), 100);
+
+        assert_eq!(to_pause.len(), 2);
+        assert!(to_pause.contains(&("t1".to_string(), 1)));
+        assert!(to_pause.contains(&("t1".to_string(), 2)));
+    }
+
+    #[test]
+    fn test_select_partitions_to_pause_skips_already_paused() {
+        let partitions = vec![
+            make_partition("t1", 0, Some(100), false, false),
+            make_partition("t1", 1, Some(500), false, true), // already paused
+            make_partition("t1", 2, Some(800), false, false),
+        ];
+
+        let to_pause = select_partitions_to_pause(partitions.iter(), 100);
+
+        assert_eq!(to_pause.len(), 1);
+        assert!(to_pause.contains(&("t1".to_string(), 2)));
+        assert!(!to_pause.contains(&("t1".to_string(), 1))); // already paused, not selected
+    }
+
+    #[test]
+    fn test_select_partitions_to_pause_none_ahead() {
+        let partitions = vec![
+            make_partition("t1", 0, Some(100), false, false),
+            make_partition("t1", 1, Some(100), false, false),
+        ];
+
+        let to_pause = select_partitions_to_pause(partitions.iter(), 100);
+        assert!(to_pause.is_empty());
+    }
+
+    #[test]
+    fn test_select_partitions_to_pause_no_timestamps() {
+        let partitions = vec![
+            make_partition("t1", 0, None, false, false),
+            make_partition("t1", 1, None, false, false),
+        ];
+
+        let to_pause = select_partitions_to_pause(partitions.iter(), 100);
+        assert!(to_pause.is_empty()); // No timestamps, nothing to pause
     }
 }
