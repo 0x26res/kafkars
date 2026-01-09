@@ -337,6 +337,10 @@ dev = [
     { name = "ty" },
     { name = "typer" },
 ]
+docs = [
+    { name = "mkdocs-material" },
+    { name = "mkdocstrings", extra = ["python"] },
+]
 
 [package.metadata]
 requires-dist = [
@@ -355,6 +359,10 @@ dev = [
     { name = "tabulate", specifier = ">=0.9" },
     { name = "ty" },
     { name = "typer", specifier = ">=0.9" },
+]
+docs = [
+    { name = "mkdocs-material", specifier = ">=9" },
+    { name = "mkdocstrings", extras = ["python"], specifier = ">=0.24" },
 ]
 
 [[package]]
