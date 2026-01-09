@@ -19,6 +19,11 @@ classifiers = [
 dynamic = [ "version" ]
 dependencies = [ "pyarrow>=14" ]
 
+optional-dependencies.docs = [
+  "mkdocs-material>=9",
+  "mkdocstrings[python]>=0.24",
+]
+
 [dependency-groups]
 dev = [
   "coverage",

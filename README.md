@@ -2,6 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/kafkars.svg)](https://pypi.org/project/kafkars/)
 [![Downloads](https://img.shields.io/pypi/dm/kafkars.svg)](https://pypi.org/project/kafkars/)
+[![Documentation](https://readthedocs.org/projects/kafkars/badge/?version=latest)](https://kafkars.readthedocs.io/en/latest/?badge=latest)
 [![Python](https://img.shields.io/pypi/pyversions/kafkars.svg)](https://pypi.org/project/kafkars/)
 [![License](https://img.shields.io/pypi/l/kafkars.svg)](https://github.com/0x26res/kafkars/blob/main/LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/0x26res/kafkars?style=social)](https://github.com/0x26res/kafkars)
@@ -105,6 +106,10 @@ Each poll returns a RecordBatch with the following schema:
 | `from_committed(topic)`         | Resume from last committed offset      |
 | `from_relative_time(topic, ms)` | Start from N milliseconds ago          |
 | `from_absolute_time(topic, ms)` | Start from specific Unix timestamp     |
+
+## Documentation
+
+Full documentation is available at [kafkars.readthedocs.io](https://kafkars.readthedocs.io).
 
 ## License
 
