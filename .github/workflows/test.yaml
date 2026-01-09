@@ -60,12 +60,30 @@ jobs:
         files: ./lcov.info,./coverage.xml
         fail_ci_if_error: true
 
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.7.19"
+
+      - name: Build docs
+        run: |
+          uv run --group=docs mkdocs build --strict
+
   all-tests-pass:
     if: always()
 
     needs:
     - lint
     - test
+    - docs
 
     runs-on: ubuntu-latest
 

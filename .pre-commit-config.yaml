@@ -6,6 +6,8 @@ repos:
     hooks:
       - id: check-toml
       - id: check-yaml
+        args:
+          - "--unsafe" # Issue with mkdocs.yml
       - id: end-of-file-fixer
       - id: mixed-line-ending
   - repo: https://github.com/charliermarsh/ruff-pre-commit
