@@ -21,6 +21,7 @@ dependencies = [ "pyarrow>=14" ]
 
 optional-dependencies.docs = [
   "mkdocs-material>=9",
+  "mkdocs-mermaid2-plugin>=1",
   "mkdocstrings[python]>=0.24",
 ]
 
@@ -36,6 +37,7 @@ dev = [
 ]
 docs = [
   "mkdocs-material>=9",
+  "mkdocs-mermaid2-plugin>=1",
   "mkdocstrings[python]>=0.24",
 ]
 
