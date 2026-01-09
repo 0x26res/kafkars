@@ -58,26 +58,29 @@ def parse_topic(topic_spec: str):
 
 @app.command()
 def poll(
-    bootstrap_servers: str = typer.Argument(
-        ..., help="Kafka bootstrap servers (e.g., localhost:9092)"
-    ),
-    topics: list[str] = typer.Argument(
+    bootstrap_servers: str = typer.Option(
         ...,
+        "--bootstrap-servers",
+        help="Kafka bootstrap servers (e.g., localhost:9092)",
+    ),
+    topics: list[str] = typer.Option(
+        ...,
+        "--topic",
         help="Topics with policy: topic:policy[:time_ms]. "
         "Policies: latest, earliest, relative_time, absolute_time. "
-        "Examples: topic_1:latest, topic_2:earliest, topic_3:relative_time:3600000",
+        "Can be specified multiple times.",
     ),
     timeout_ms: int = typer.Option(
-        1000, "--timeout", "-t", help="Poll timeout in milliseconds"
+        1000, "--timeout", help="Poll timeout in milliseconds"
     ),
     max_batches: Optional[int] = typer.Option(
-        None, "--max-batches", "-n", help="Maximum number of batches to consume"
+        None, "--max-batches", help="Maximum number of batches to consume"
     ),
     batch_size: int = typer.Option(
-        1000, "--batch-size", "-b", help="Maximum messages per batch"
+        1000, "--batch-size", help="Maximum messages per batch"
     ),
     show_state: bool = typer.Option(
-        False, "--show-state", "-s", help="Show partition state after each poll"
+        False, "--show-state", help="Show partition state after each poll"
     ),
 ) -> None:
     """Poll messages from Kafka topics and display them as markdown tables."""

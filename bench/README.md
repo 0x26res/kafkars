@@ -66,17 +66,20 @@ Policies:
 
 ```shell
 # Poll from latest offset
-uv run python bench/poll_messages.py localhost:9092 topic_1:latest
+uv run python bench/poll_messages.py --bootstrap-servers localhost:9092 --topic topic_1:latest
 
 # Poll from the beginning
-uv run python bench/poll_messages.py localhost:9092 topic_1:earliest
+uv run python bench/poll_messages.py --bootstrap-servers localhost:9092 --topic topic_1:earliest
 
 # Poll multiple topics with different policies
-uv run python bench/poll_messages.py localhost:9092 topic_2:earliest topic_1:earliest
+uv run python bench/poll_messages.py --bootstrap-servers localhost:9092 --topic topic_2:earliest --topic topic_1:earliest
 
 # Poll from 1 hour ago (3600000 ms)
-uv run python bench/poll_messages.py localhost:9092 topic_1:relative_time:3600000
+uv run python bench/poll_messages.py --bootstrap-servers localhost:9092 --topic topic_1:relative_time:3600000
 
 # With custom timeout and max batches
-uv run python bench/poll_messages.py localhost:9092 topic_1:latest -t 2000 -n 10
+uv run python bench/poll_messages.py --bootstrap-servers localhost:9092 --topic topic_1:latest --timeout 2000 --max-batches 10
+
+# Show partition state after each poll
+uv run python bench/poll_messages.py --bootstrap-servers localhost:9092 --topic topic_1:earliest --show-state
 ```
