@@ -286,6 +286,25 @@ impl ConsumerManager {
 
         consumer.assign(&tpl).map_err(|e| e.to_string())?;
 
+        // Explicitly seek to the start offset for each partition.
+        // assign() alone doesn't reliably position the consumer at the specified offset.
+        let seek_timeout = Duration::from_secs(5);
+        for pso in &resolved_offsets {
+            consumer
+                .seek(
+                    &pso.topic,
+                    pso.partition,
+                    Offset::Offset(pso.replay_start_offset),
+                    seek_timeout,
+                )
+                .map_err(|e| {
+                    format!(
+                        "failed to seek {}:{} to offset {}: {}",
+                        pso.topic, pso.partition, pso.replay_start_offset, e
+                    )
+                })?;
+        }
+
         let topic_names = source_topics.into_iter().map(|t| t.name).collect();
         let start_offsets = StartOffsets::new(resolved_offsets);
         Ok(Self::new(
