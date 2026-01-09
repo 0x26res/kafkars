@@ -10,9 +10,6 @@ class TestValidateSourceTopic:
     def test_earliest(self):
         validate_source_topic(SourceTopic.from_earliest("my-topic"))
 
-    def test_committed(self):
-        validate_source_topic(SourceTopic.from_committed("my-topic"))
-
     def test_relative_time(self):
         validate_source_topic(SourceTopic.from_relative_time("my-topic", 3600000))
 

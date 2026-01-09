@@ -46,7 +46,6 @@ impl<'py> FromPyObject<'py> for PySourceTopic {
         let source_topic = match policy.as_str() {
             "latest" => SourceTopic::from_latest(name),
             "earliest" => SourceTopic::from_earliest(name),
-            "committed" => SourceTopic::from_committed(name),
             "relative_time" => {
                 let ms = time_ms.ok_or_else(|| {
                     PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -65,9 +64,9 @@ impl<'py> FromPyObject<'py> for PySourceTopic {
             }
             _ => {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "unknown policy: '{}'. Expected: latest, earliest, committed, relative_time, absolute_time",
-                    policy
-                )))
+                "unknown policy: '{}'. Expected: latest, earliest, relative_time, absolute_time",
+                policy
+            )))
             }
         };
 

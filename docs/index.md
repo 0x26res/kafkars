@@ -22,10 +22,20 @@ This architecture is ideal for:
 - High-volume event processing
 - Data lake ingestion
 
+## Important: Analytics-Focused Design
+
+**kafkars does not commit offsets.** It is designed for analytics and high-throughput batch processing, not transactional workloads.
+
+- **No exactly-once semantics**: Messages may be reprocessed if your application restarts
+- **No offset tracking**: You control where to start reading via offset policies
+- **Stateless consumers**: Each consumer instance starts fresh based on the configured policy
+
+If you need exactly-once processing, transactional guarantees, or automatic offset management, use a traditional Kafka client like `confluent-kafka-python`.
+
 ## Features
 
 - **Ordered delivery**: Messages released in timestamp order across all partitions
-- **Flexible offset policies**: Start from earliest, latest, committed, or any timestamp
+- **Flexible offset policies**: Start from earliest, latest, or any timestamp
 - **Backpressure management**: Automatically pauses fast partitions to prevent memory overflow
 - **Arrow-native output**: Returns PyArrow RecordBatch for efficient downstream processing
 

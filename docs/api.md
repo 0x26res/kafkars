@@ -134,17 +134,6 @@ Create a SourceTopic starting from the latest offset (new messages only).
 
 ---
 
-#### from_committed
-
-```python
-@staticmethod
-def from_committed(name: str) -> SourceTopic
-```
-
-Create a SourceTopic starting from the last committed offset.
-
----
-
 #### from_relative_time
 
 ```python

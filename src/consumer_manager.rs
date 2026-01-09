@@ -319,28 +319,6 @@ impl ConsumerManager {
         let start_offset = match policy {
             OffsetPolicy::Latest => high,
             OffsetPolicy::Earliest => low,
-            OffsetPolicy::Committed => {
-                let mut tpl = TopicPartitionList::new();
-                tpl.add_partition(topic, partition);
-                let committed = consumer.committed_offsets(tpl, timeout).map_err(|e| {
-                    format!(
-                        "failed to fetch committed offset for {}:{}: {}",
-                        topic, partition, e
-                    )
-                })?;
-
-                if let Some(elem) = committed.elements().first() {
-                    match elem.offset() {
-                        Offset::Offset(o) => o,
-                        _ => low, // No committed offset, fall back to earliest
-                    }
-                } else {
-                    return Err(format!(
-                        "failed to get committed offset for {}:{}",
-                        topic, partition
-                    ));
-                }
-            }
             OffsetPolicy::RelativeTime { ms } => {
                 let now_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)

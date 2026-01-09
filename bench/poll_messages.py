@@ -16,9 +16,8 @@ def parse_topic(topic_spec: str):
     Examples:
         topic_1:latest
         topic_2:earliest
-        topic_3:committed
-        topic_4:relative_time:3600000
-        topic_5:absolute_time:1704067200000
+        topic_3:relative_time:3600000
+        topic_4:absolute_time:1704067200000
     """
     from kafkars import SourceTopic
 
@@ -36,8 +35,6 @@ def parse_topic(topic_spec: str):
         return SourceTopic.from_latest(name)
     elif policy == "earliest":
         return SourceTopic.from_earliest(name)
-    elif policy == "committed":
-        return SourceTopic.from_committed(name)
     elif policy == "relative_time":
         if len(parts) < 3:
             raise typer.BadParameter(
@@ -55,7 +52,7 @@ def parse_topic(topic_spec: str):
     else:
         raise typer.BadParameter(
             f"Unknown policy: '{policy}'. "
-            "Expected: latest, earliest, committed, relative_time, absolute_time"
+            "Expected: latest, earliest, relative_time, absolute_time"
         )
 
 
@@ -67,7 +64,7 @@ def poll(
     topics: list[str] = typer.Argument(
         ...,
         help="Topics with policy: topic:policy[:time_ms]. "
-        "Policies: latest, earliest, committed, relative_time, absolute_time. "
+        "Policies: latest, earliest, relative_time, absolute_time. "
         "Examples: topic_1:latest, topic_2:earliest, topic_3:relative_time:3600000",
     ),
     timeout_ms: int = typer.Option(

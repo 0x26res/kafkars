@@ -2,7 +2,6 @@
 pub enum OffsetPolicy {
     Latest,
     Earliest,
-    Committed,
     RelativeTime { ms: i64 },
     AbsoluteTime { ms: i64 },
     StartOfDay { time_ms: i64, timezone: String },
@@ -26,13 +25,6 @@ impl SourceTopic {
         Self {
             name: name.into(),
             offset_policy: OffsetPolicy::Earliest,
-        }
-    }
-
-    pub fn from_committed(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            offset_policy: OffsetPolicy::Committed,
         }
     }
 
@@ -104,13 +96,6 @@ mod tests {
         let topic = SourceTopic::from_earliest("my-topic");
         assert_eq!(topic.name, "my-topic");
         assert_eq!(topic.offset_policy, OffsetPolicy::Earliest);
-    }
-
-    #[test]
-    fn test_from_committed() {
-        let topic = SourceTopic::from_committed("my-topic");
-        assert_eq!(topic.name, "my-topic");
-        assert_eq!(topic.offset_policy, OffsetPolicy::Committed);
     }
 
     #[test]

@@ -61,7 +61,6 @@ Policies:
 
 - `latest` - start from latest offset
 - `earliest` - start from beginning
-- `committed` - start from committed offset
 - `relative_time:ms` - start from relative time (ms ago)
 - `absolute_time:ms` - start from absolute timestamp (epoch ms)
 

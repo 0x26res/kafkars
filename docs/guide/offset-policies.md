@@ -22,17 +22,6 @@ Start from the beginning of the topic:
 topic = SourceTopic.from_earliest("my-topic")
 ```
 
-### Committed
-
-Resume from the last committed offset for the consumer group:
-
-```python
-topic = SourceTopic.from_committed("my-topic")
-```
-
-!!! note
-    Falls back to earliest if no committed offset exists.
-
 ### Relative Time
 
 Start from a specific time offset from now:

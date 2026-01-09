@@ -18,10 +18,6 @@ class SourceTopic:
         return SourceTopic(name=name, policy="earliest")
 
     @staticmethod
-    def from_committed(name: str) -> "SourceTopic":
-        return SourceTopic(name=name, policy="committed")
-
-    @staticmethod
     def from_relative_time(name: str, time_ms: int) -> "SourceTopic":
         return SourceTopic(name=name, policy="relative_time", time_ms=time_ms)
 
