@@ -104,7 +104,6 @@ fn partition_state_schema() -> Schema {
         Field::new("consumed_offset", DataType::Int64, false),
         Field::new("released_offset", DataType::Int64, false),
         Field::new("last_message_timestamp", timestamp_ms_type(), true),
-        Field::new("cutoff", timestamp_ms_type(), false),
         Field::new("is_live", DataType::Boolean, false),
         Field::new("is_paused", DataType::Boolean, false),
     ])
@@ -188,7 +187,6 @@ impl PyConsumerManager {
     fn partition_state<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let partition_info = self.manager.partition_info();
         let replay_offsets_map = self.manager.start_offsets();
-        let cutoff = self.manager.cutoff_ms();
 
         let mut sorted_partitions: Vec<_> = partition_info.values().collect();
         sorted_partitions.sort_by(|a, b| (&a.topic, a.partition).cmp(&(&b.topic, b.partition)));
@@ -221,7 +219,6 @@ impl PyConsumerManager {
             .collect();
         let last_timestamps: Vec<Option<i64>> =
             sorted_partitions.iter().map(|p| p.timestamp_ms).collect();
-        let cutoffs: Vec<i64> = sorted_partitions.iter().map(|_| cutoff).collect();
         let is_live: Vec<bool> = sorted_partitions.iter().map(|p| p.is_live).collect();
         let is_paused: Vec<bool> = sorted_partitions.iter().map(|p| p.is_paused).collect();
 
@@ -235,7 +232,6 @@ impl PyConsumerManager {
                 Arc::new(Int64Array::from(consumed_offsets)),
                 Arc::new(Int64Array::from(released_offsets)),
                 Arc::new(TimestampMillisecondArray::from(last_timestamps).with_timezone("UTC")),
-                Arc::new(TimestampMillisecondArray::from(cutoffs).with_timezone("UTC")),
                 Arc::new(BooleanArray::from(is_live)),
                 Arc::new(BooleanArray::from(is_paused)),
             ],
