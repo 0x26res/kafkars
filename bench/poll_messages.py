@@ -100,10 +100,10 @@ def poll(
     # Using a far-future cutoff to avoid stopping early
     cutoff_ms = 2**62
 
-    typer.echo(f"Connecting to {bootstrap_servers}...")
+    typer.secho(f"Connecting to {bootstrap_servers}...", fg=typer.colors.CYAN)
     for topic_spec in topics:
-        typer.echo(f"  Subscribing: {topic_spec}")
-    typer.echo("Press Ctrl+C to stop\n")
+        typer.secho(f"  Subscribing: {topic_spec}", fg=typer.colors.GREEN)
+    typer.secho("Press Ctrl+C to stop\n", fg=typer.colors.BRIGHT_BLACK)
 
     manager = ConsumerManager(config, source_topics, cutoff_ms, batch_size)
 
@@ -115,24 +115,34 @@ def poll(
             batch = manager.poll(timeout_ms)
 
             if batch.num_rows > 0:
-                print(f"\n{batch.to_pandas().to_markdown()}")
-                print(f"\n*{batch.num_rows} message(s) received*")
+                typer.echo(f"\n{batch.to_pandas().to_markdown()}")
+                typer.secho(
+                    f"\n{batch.num_rows} message(s) received",
+                    fg=typer.colors.YELLOW,
+                    bold=True,
+                )
 
                 if show_state:
                     state = manager.partition_state()
-                    print(f"\n**Partition State:**\n{state.to_pandas().to_markdown()}")
+                    typer.secho("\nPartition State:", fg=typer.colors.BLUE, bold=True)
+                    typer.echo(state.to_pandas().to_markdown())
 
-                print()
+                typer.echo()
                 batch_count += 1
                 total_messages += batch.num_rows
 
                 if max_batches and batch_count >= max_batches:
-                    typer.echo(f"Reached maximum batch count ({max_batches})")
+                    typer.secho(
+                        f"Reached maximum batch count ({max_batches})",
+                        fg=typer.colors.MAGENTA,
+                    )
                     break
 
     except KeyboardInterrupt:
-        typer.echo(
-            f"\nStopped. Received {total_messages} total messages in {batch_count} batches."
+        typer.secho(
+            f"\nStopped. Received {total_messages} total messages in {batch_count} batches.",
+            fg=typer.colors.RED,
+            bold=True,
         )
 
 
