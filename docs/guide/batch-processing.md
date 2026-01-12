@@ -80,18 +80,17 @@ print(df.to_markdown())
 
 Returns:
 
-| Column                   | Description                                |
-|--------------------------|--------------------------------------------|
-| `topic`                  | Topic name                                 |
-| `partition`              | Partition number                           |
-| `replay_start_offset`    | Starting offset (resolved at creation)     |
-| `replay_end_offset`      | End offset (captured at creation)          |
-| `consumed_offset`        | Last consumed offset                       |
-| `released_offset`        | Last released offset                       |
-| `last_message_timestamp` | Timestamp of last consumed message         |
-| `cutoff`                 | Cutoff timestamp                           |
-| `is_live`                | Whether partition has caught up            |
-| `is_paused`              | Whether partition is paused (backpressure) |
+| Column                    | Description                                |
+|---------------------------|--------------------------------------------|
+| `topic`                   | Topic name                                 |
+| `partition`               | Partition number                           |
+| `replay_start_offset`     | Starting offset (resolved at creation)     |
+| `replay_end_offset`       | End offset (captured at creation)          |
+| `consumed_offset`         | Last consumed offset                       |
+| `released_offset`         | Last released offset                       |
+| `last_consumed_timestamp` | Timestamp of last consumed message         |
+| `is_live`                 | Whether partition has caught up            |
+| `is_paused`               | Whether partition is paused (backpressure) |
 
 ### Other Metrics
 

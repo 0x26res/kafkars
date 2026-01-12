@@ -198,8 +198,7 @@ from kafkars import PARTITION_STATE_SCHEMA
 # - replay_end_offset: int64
 # - consumed_offset: int64
 # - released_offset: int64
-# - last_message_timestamp: timestamp[ms, tz=UTC] (nullable)
-# - cutoff: timestamp[ms, tz=UTC]
+# - last_consumed_timestamp: timestamp[ms, tz=UTC] (nullable)
 # - is_live: bool
 # - is_paused: bool
 ```

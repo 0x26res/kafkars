@@ -21,8 +21,9 @@ PARTITION_STATE_SCHEMA = pa.schema(
         pa.field("replay_end_offset", pa.int64(), nullable=False),
         pa.field("consumed_offset", pa.int64(), nullable=False),
         pa.field("released_offset", pa.int64(), nullable=False),
-        pa.field("last_message_timestamp", pa.timestamp("ms", tz="UTC"), nullable=True),
-        pa.field("cutoff", pa.timestamp("ms", tz="UTC"), nullable=False),
+        pa.field(
+            "last_consumed_timestamp", pa.timestamp("ms", tz="UTC"), nullable=True
+        ),
         pa.field("is_live", pa.bool_(), nullable=False),
         pa.field("is_paused", pa.bool_(), nullable=False),
     ]

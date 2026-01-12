@@ -45,8 +45,7 @@ def test_partition_state_schema_fields():
         "replay_end_offset",
         "consumed_offset",
         "released_offset",
-        "last_message_timestamp",
-        "cutoff",
+        "last_consumed_timestamp",
         "is_live",
         "is_paused",
     ]
