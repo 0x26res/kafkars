@@ -3,6 +3,7 @@
 
 import uuid
 from typing import Optional
+import pyarrow.compute as pc
 
 import typer
 
@@ -109,12 +110,38 @@ def poll(
 
     batch_count = 0
     total_messages = 0
+    prev_max_timestamp = None
 
     try:
         while True:
             batch = manager.poll(timeout_ms)
 
             if batch.num_rows > 0:
+                # Check batch size invariant
+                if batch.num_rows > batch_size:
+                    raise RuntimeError(
+                        f"Batch size invariant violated! "
+                        f"Received {batch.num_rows} messages, max allowed: {batch_size}"
+                    )
+
+                # Check timestamp ordering invariant while not live
+                if not manager.is_live():
+                    timestamps = batch.column("timestamp")
+                    current_min_ts = pc.min(timestamps).as_py()
+                    current_max_ts = pc.max(timestamps).as_py()
+
+                    if (
+                        prev_max_timestamp is not None
+                        and current_min_ts < prev_max_timestamp
+                    ):
+                        raise RuntimeError(
+                            f"Timestamp ordering invariant violated! "
+                            f"Previous batch max: {prev_max_timestamp}, "
+                            f"Current batch min: {current_min_ts}"
+                        )
+
+                    prev_max_timestamp = current_max_ts
+
                 typer.echo(f"\n{batch.to_pandas().to_markdown()}")
                 typer.secho(
                     f"\n{batch.num_rows} message(s) received",
