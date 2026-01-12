@@ -2,12 +2,84 @@
 """Poll messages from Kafka and display them as markdown tables."""
 
 import uuid
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Optional
-import pyarrow.compute as pc
 
+import pyarrow as pa
+import pyarrow.compute as pc
 import typer
 
 app = typer.Typer(help="Poll Kafka messages and display as markdown tables")
+
+
+@dataclass
+class BatchProcessor:
+    """Processes batches from ConsumerManager with invariant checking."""
+
+    batch_size: int
+    show_state: bool = False
+
+    # State
+    batch_count: int = field(default=0, init=False)
+    total_messages: int = field(default=0, init=False)
+    prev_max_timestamp: Optional[datetime] = field(default=None, init=False)
+
+    def process(
+        self, batch: pa.RecordBatch, state: pa.RecordBatch, is_live: bool
+    ) -> None:
+        """Process a batch, checking invariants and displaying results."""
+        self._check_batch_size(batch)
+        self._check_timestamp_ordering(batch, is_live)
+        self._display(batch, state)
+        self.batch_count += 1
+        self.total_messages += batch.num_rows
+
+    def _check_batch_size(self, batch: pa.RecordBatch) -> None:
+        if batch.num_rows > self.batch_size:
+            raise RuntimeError(
+                f"Batch size invariant violated! "
+                f"Received {batch.num_rows} messages, max allowed: {self.batch_size}"
+            )
+
+    def _check_timestamp_ordering(self, batch: pa.RecordBatch, is_live: bool) -> None:
+        if is_live:
+            return
+
+        timestamps = batch.column("timestamp")
+        current_min_ts = pc.min(timestamps).as_py()
+        current_max_ts = pc.max(timestamps).as_py()
+
+        if (
+            self.prev_max_timestamp is not None
+            and current_min_ts < self.prev_max_timestamp
+        ):
+            raise RuntimeError(
+                f"Timestamp ordering invariant violated! "
+                f"Previous batch max: {self.prev_max_timestamp}, "
+                f"Current batch min: {current_min_ts}"
+            )
+
+        self.prev_max_timestamp = current_max_ts
+
+    def _display(self, batch: pa.RecordBatch, state: pa.RecordBatch) -> None:
+        typer.echo(f"\n{batch.to_pandas().to_markdown()}")
+
+        consumed = pc.sum(state.column("consumed_offset")).as_py()
+        released = pc.sum(state.column("released_offset")).as_py()
+        pending = consumed - released
+
+        typer.secho(
+            f"\n{batch.num_rows} message(s) received, {pending} pending",
+            fg=typer.colors.YELLOW,
+            bold=True,
+        )
+
+        if self.show_state:
+            typer.secho("\nPartition State:", fg=typer.colors.BLUE, bold=True)
+            typer.echo(state.to_pandas().to_markdown())
+
+        typer.echo()
 
 
 def parse_topic(topic_spec: str):
@@ -107,58 +179,17 @@ def poll(
     typer.secho("Press Ctrl+C to stop\n", fg=typer.colors.BRIGHT_BLACK)
 
     manager = ConsumerManager(config, source_topics, cutoff_ms, batch_size)
-
-    batch_count = 0
-    total_messages = 0
-    prev_max_timestamp = None
+    processor = BatchProcessor(batch_size=batch_size, show_state=show_state)
 
     try:
         while True:
             batch = manager.poll(timeout_ms)
 
             if batch.num_rows > 0:
-                # Check batch size invariant
-                if batch.num_rows > batch_size:
-                    raise RuntimeError(
-                        f"Batch size invariant violated! "
-                        f"Received {batch.num_rows} messages, max allowed: {batch_size}"
-                    )
+                state = manager.partition_state()
+                processor.process(batch, state, manager.is_live())
 
-                # Check timestamp ordering invariant while not live
-                if not manager.is_live():
-                    timestamps = batch.column("timestamp")
-                    current_min_ts = pc.min(timestamps).as_py()
-                    current_max_ts = pc.max(timestamps).as_py()
-
-                    if (
-                        prev_max_timestamp is not None
-                        and current_min_ts < prev_max_timestamp
-                    ):
-                        raise RuntimeError(
-                            f"Timestamp ordering invariant violated! "
-                            f"Previous batch max: {prev_max_timestamp}, "
-                            f"Current batch min: {current_min_ts}"
-                        )
-
-                    prev_max_timestamp = current_max_ts
-
-                typer.echo(f"\n{batch.to_pandas().to_markdown()}")
-                typer.secho(
-                    f"\n{batch.num_rows} message(s) received",
-                    fg=typer.colors.YELLOW,
-                    bold=True,
-                )
-
-                if show_state:
-                    state = manager.partition_state()
-                    typer.secho("\nPartition State:", fg=typer.colors.BLUE, bold=True)
-                    typer.echo(state.to_pandas().to_markdown())
-
-                typer.echo()
-                batch_count += 1
-                total_messages += batch.num_rows
-
-                if max_batches and batch_count >= max_batches:
+                if max_batches and processor.batch_count >= max_batches:
                     typer.secho(
                         f"Reached maximum batch count ({max_batches})",
                         fg=typer.colors.MAGENTA,
@@ -167,7 +198,8 @@ def poll(
 
     except KeyboardInterrupt:
         typer.secho(
-            f"\nStopped. Received {total_messages} total messages in {batch_count} batches.",
+            f"\nStopped. Received {processor.total_messages} total messages "
+            f"in {processor.batch_count} batches.",
             fg=typer.colors.RED,
             bold=True,
         )
