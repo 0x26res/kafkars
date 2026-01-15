@@ -30,7 +30,7 @@ manager = ConsumerManager(
         "group.id": "my-consumer-group",
     },
     topics=topics,
-    cutoff_ms=int(time.time() * 1000),  # Current time
+    cutoff_ms=time.time_ns() // 1_000_000,  # Current time
     batch_size=1000,
 )
 ```

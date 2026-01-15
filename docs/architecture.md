@@ -250,7 +250,7 @@ topics = [
 manager = ConsumerManager(
     config={"bootstrap.servers": "localhost:9092", "group.id": "my-group"},
     topics=topics,
-    cutoff_ms=int(time.time() * 1000),  # Now
+    cutoff_ms=time.time_ns() // 1_000_000,  # Now
     batch_size=1000,
 )
 

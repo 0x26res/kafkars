@@ -33,7 +33,7 @@ manager = ConsumerManager(
         "group.id": "my-group",
     },
     topics=[SourceTopic.from_earliest("events")],
-    cutoff_ms=int(time.time() * 1000),
+    cutoff_ms=time.time_ns() // 1_000_000,
     batch_size=1000,
 )
 ```
