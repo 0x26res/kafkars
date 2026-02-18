@@ -1,5 +1,12 @@
 pub mod consumer_manager;
+pub mod consumer_trait;
+pub mod mock_consumer;
 pub mod source_topic;
+
+#[cfg(feature = "testing")]
+pub mod test_runner;
+#[cfg(feature = "testing")]
+pub mod test_scenario;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,7 +18,7 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::pyarrow::ToPyArrow;
-use consumer_manager::ConsumerManager;
+use consumer_manager::RealConsumerManager;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use source_topic::SourceTopic;
@@ -111,7 +118,7 @@ fn partition_state_schema() -> Schema {
 
 #[pyclass]
 struct PyConsumerManager {
-    manager: ConsumerManager,
+    manager: RealConsumerManager,
     message_schema: Arc<Schema>,
     partition_state_schema: Arc<Schema>,
 }
@@ -128,7 +135,7 @@ impl PyConsumerManager {
     ) -> PyResult<Self> {
         let source_topics: Vec<SourceTopic> = topics.into_iter().map(|t| t.0).collect();
 
-        let manager = ConsumerManager::create(config, source_topics, cutoff_ms, batch_size)
+        let manager = RealConsumerManager::create(config, source_topics, cutoff_ms, batch_size)
             .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
 
         Ok(Self {
@@ -265,6 +272,68 @@ fn get_partition_state_schema(py: Python<'_>) -> PyResult<Py<PyAny>> {
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
 }
 
+// Testing module Python bindings (only available with "testing" feature)
+#[cfg(feature = "testing")]
+mod testing_bindings {
+    use super::*;
+
+    /// Python wrapper for batch test result.
+    #[pyclass]
+    #[derive(Clone)]
+    pub struct PyBatchResult {
+        #[pyo3(get)]
+        pub batch_index: usize,
+        #[pyo3(get)]
+        pub description: String,
+        #[pyo3(get)]
+        pub passed: bool,
+        #[pyo3(get)]
+        pub released_match: bool,
+        #[pyo3(get)]
+        pub state_match: bool,
+        #[pyo3(get)]
+        pub all_consumed: bool,
+        #[pyo3(get)]
+        pub errors: Vec<String>,
+    }
+
+    /// Python wrapper for test result.
+    #[pyclass]
+    pub struct PyTestResult {
+        #[pyo3(get)]
+        pub passed: bool,
+        #[pyo3(get)]
+        pub batch_results: Vec<PyBatchResult>,
+    }
+
+    /// Run a test scenario from JSON and return the results.
+    #[pyfunction]
+    pub fn run_test_scenario(scenario_json: &str) -> PyResult<PyTestResult> {
+        let scenario = test_scenario::TestScenario::from_json(scenario_json).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid scenario JSON: {}", e))
+        })?;
+
+        let result = test_runner::run_scenario(&scenario);
+
+        Ok(PyTestResult {
+            passed: result.passed,
+            batch_results: result
+                .batch_results
+                .into_iter()
+                .map(|br| PyBatchResult {
+                    batch_index: br.batch_index,
+                    description: br.description,
+                    passed: br.passed,
+                    released_match: br.released_match,
+                    state_match: br.state_match,
+                    all_consumed: br.all_consumed,
+                    errors: br.errors,
+                })
+                .collect(),
+        })
+    }
+}
+
 /// Version from Cargo.toml, set at compile time.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -275,5 +344,14 @@ fn _lib(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate_source_topic, m)?)?;
     m.add_function(wrap_pyfunction!(get_message_schema, m)?)?;
     m.add_function(wrap_pyfunction!(get_partition_state_schema, m)?)?;
+
+    // Testing bindings (only available with "testing" feature)
+    #[cfg(feature = "testing")]
+    {
+        m.add_class::<testing_bindings::PyTestResult>()?;
+        m.add_class::<testing_bindings::PyBatchResult>()?;
+        m.add_function(wrap_pyfunction!(testing_bindings::run_test_scenario, m)?)?;
+    }
+
     Ok(())
 }

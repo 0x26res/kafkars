@@ -1,12 +1,12 @@
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer};
-use rdkafka::message::{BorrowedMessage, Message};
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::TopicPartitionList;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::consumer_trait::{KafkaConsumer, MessageExtractor};
 use crate::source_topic::{OffsetPolicy, SourceTopic};
 
 /// Immutable record of the resolved offsets for a partition at creation time.
@@ -27,7 +27,8 @@ pub struct StartOffsets {
 }
 
 impl StartOffsets {
-    fn new(offsets: Vec<PartitionStartOffset>) -> Self {
+    /// Create a new StartOffsets from a vector of partition start offsets.
+    pub fn from_vec(offsets: Vec<PartitionStartOffset>) -> Self {
         Self {
             offsets: Arc::new(offsets),
         }
@@ -157,8 +158,8 @@ impl ConsumerMetrics {
 }
 
 /// Manages Kafka consumer with partition tracking, message buffering, and backpressure.
-pub struct ConsumerManager {
-    consumer: BaseConsumer,
+pub struct ConsumerManager<C: KafkaConsumer> {
+    consumer: C,
     topic_names: Vec<String>,
     start_offsets: StartOffsets,
     cutoff_ms: i64,
@@ -171,9 +172,12 @@ pub struct ConsumerManager {
     metrics: ConsumerMetrics,
 }
 
-impl ConsumerManager {
+/// Type alias for production use with real Kafka consumer.
+pub type RealConsumerManager = ConsumerManager<BaseConsumer>;
+
+impl<C: KafkaConsumer> ConsumerManager<C> {
     fn new(
-        consumer: BaseConsumer,
+        consumer: C,
         topic_names: Vec<String>,
         start_offsets: StartOffsets,
         cutoff_ms: i64,
@@ -205,6 +209,25 @@ impl ConsumerManager {
         }
     }
 
+    /// Create a ConsumerManager with pre-resolved configuration.
+    /// This is the entry point for testing with mock consumers.
+    pub fn from_resolved(
+        consumer: C,
+        start_offsets: StartOffsets,
+        topic_names: Vec<String>,
+        cutoff_ms: i64,
+        batch_size: usize,
+    ) -> Self {
+        Self::new(consumer, topic_names, start_offsets, cutoff_ms, batch_size)
+    }
+
+    /// Get a reference to the underlying consumer.
+    pub fn consumer(&self) -> &C {
+        &self.consumer
+    }
+}
+
+impl ConsumerManager<BaseConsumer> {
     pub fn create(
         mut config: HashMap<String, String>,
         source_topics: Vec<SourceTopic>,
@@ -300,29 +323,29 @@ impl ConsumerManager {
             .map_err(|e| e.to_string())?;
         }
 
-        consumer.assign(&tpl).map_err(|e| e.to_string())?;
+        Consumer::assign(&consumer, &tpl).map_err(|e| e.to_string())?;
 
         // Explicitly seek to the start offset for each partition.
         // assign() alone doesn't reliably position the consumer at the specified offset.
         let seek_timeout = Duration::from_secs(5);
         for pso in &resolved_offsets {
-            consumer
-                .seek(
-                    &pso.topic,
-                    pso.partition,
-                    Offset::Offset(pso.replay_start_offset),
-                    seek_timeout,
+            Consumer::seek(
+                &consumer,
+                &pso.topic,
+                pso.partition,
+                Offset::Offset(pso.replay_start_offset),
+                seek_timeout,
+            )
+            .map_err(|e| {
+                format!(
+                    "failed to seek {}:{} to offset {}: {}",
+                    pso.topic, pso.partition, pso.replay_start_offset, e
                 )
-                .map_err(|e| {
-                    format!(
-                        "failed to seek {}:{} to offset {}: {}",
-                        pso.topic, pso.partition, pso.replay_start_offset, e
-                    )
-                })?;
+            })?;
         }
 
         let topic_names = source_topics.into_iter().map(|t| t.name).collect();
-        let start_offsets = StartOffsets::new(resolved_offsets);
+        let start_offsets = StartOffsets::from_vec(resolved_offsets);
         Ok(Self::new(
             consumer,
             topic_names,
@@ -407,7 +430,12 @@ impl ConsumerManager {
             ))
         }
     }
+}
 
+impl<C: KafkaConsumer> ConsumerManager<C>
+where
+    for<'a> C::Message<'a>: MessageExtractor,
+{
     pub fn poll(&mut self, timeout: Duration) -> Result<Vec<TimestampedMessage>, String> {
         // First poll with the given timeout
         if !self.poll_one(timeout)? {
@@ -431,31 +459,33 @@ impl ConsumerManager {
     /// Polls for a single message. Returns Ok(true) if a message was received,
     /// Ok(false) if no message, or Err if an error occurred.
     fn poll_one(&mut self, timeout: Duration) -> Result<bool, String> {
-        let polled = self.consumer.poll(timeout);
-        if let Some(result) = polled {
-            match result {
-                Ok(msg) => {
-                    if let Some(timestamped) = Self::extract_message(&msg) {
-                        self.update_partition_info(&timestamped);
-                        self.held_messages.push(timestamped);
-                        self.metrics.messages_consumed += 1;
-                        return Ok(true);
-                    }
-                }
-                Err(e) => {
-                    return Err(format!(
-                        "{} (subscribed topics: {})",
-                        e,
-                        self.topic_names.join(", ")
-                    ));
-                }
+        // Extract message data immediately to release the borrow on consumer
+        let extracted = {
+            let polled = self.consumer.poll(timeout);
+            match polled {
+                Some(Ok(msg)) => Ok(Self::extract_message_generic(&msg)),
+                Some(Err(e)) => Err(format!(
+                    "{} (subscribed topics: {})",
+                    e,
+                    self.topic_names.join(", ")
+                )),
+                None => Ok(None),
             }
+        };
+
+        match extracted? {
+            Some(timestamped) => {
+                self.update_partition_info(&timestamped);
+                self.held_messages.push(timestamped);
+                self.metrics.messages_consumed += 1;
+                Ok(true)
+            }
+            None => Ok(false),
         }
-        Ok(false)
     }
 
-    fn extract_message(msg: &BorrowedMessage) -> Option<TimestampedMessage> {
-        let timestamp_ms = msg.timestamp().to_millis()?;
+    fn extract_message_generic<M: MessageExtractor>(msg: &M) -> Option<TimestampedMessage> {
+        let timestamp_ms = msg.timestamp_ms()?;
 
         Some(TimestampedMessage {
             key: msg.key().map(|k| k.to_vec()),
@@ -644,7 +674,7 @@ mod tests {
 
     #[test]
     fn test_start_offsets() {
-        let offsets = StartOffsets::new(vec![
+        let offsets = StartOffsets::from_vec(vec![
             PartitionStartOffset {
                 topic: "topic_1".to_string(),
                 partition: 0,

@@ -1,0 +1,87 @@
+{
+  "name": "Basic two-partition timestamp ordering",
+  "config": {
+    "topics": [
+      {
+        "name": "events",
+        "partitions": [
+          {
+            "partition": 0,
+            "start_offset": 0,
+            "end_offset": 100
+          },
+          {
+            "partition": 1,
+            "start_offset": 0,
+            "end_offset": 100
+          }
+        ]
+      }
+    ],
+    "cutoff_ms": 2000,
+    "batch_size": 10
+  },
+  "batches": [
+    {
+      "description": "Messages with interleaved timestamps - release up to low water mark",
+      "messages": [
+        {
+          "topic": "events",
+          "partition": 0,
+          "offset": 0,
+          "timestamp_ms": 1000,
+          "value": "p0-msg0"
+        },
+        {
+          "topic": "events",
+          "partition": 1,
+          "offset": 0,
+          "timestamp_ms": 500,
+          "value": "p1-msg0"
+        },
+        {
+          "topic": "events",
+          "partition": 0,
+          "offset": 1,
+          "timestamp_ms": 1500,
+          "value": "p0-msg1"
+        },
+        {
+          "topic": "events",
+          "partition": 1,
+          "offset": 1,
+          "timestamp_ms": 800,
+          "value": "p1-msg1"
+        }
+      ],
+      "expected_released": [
+        {
+          "topic": "events",
+          "partition": 1,
+          "offset": 0
+        },
+        {
+          "topic": "events",
+          "partition": 1,
+          "offset": 1
+        }
+      ],
+      "expected_partition_state": [
+        {
+          "topic": "events",
+          "partition": 0,
+          "consumed_offset": 1,
+          "released_offset": 0,
+          "is_live": false
+        },
+        {
+          "topic": "events",
+          "partition": 1,
+          "consumed_offset": 1,
+          "released_offset": 1,
+          "is_live": false
+        }
+      ]
+    }
+  ]
+}
