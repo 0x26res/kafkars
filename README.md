@@ -12,6 +12,7 @@
 [![Rust](https://img.shields.io/badge/rust-%23000000.svg?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Apache Arrow](https://img.shields.io/badge/Apache%20Arrow-powered-orange.svg)](https://arrow.apache.org/)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![prek](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/j178/prek/master/docs/assets/badge-v0.json)](https://github.com/j178/prek)
 
 Rust-based, Arrow-powered Python Kafka client for high-throughput data pipelines.
 
