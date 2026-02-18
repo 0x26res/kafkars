@@ -30,6 +30,7 @@ dev = [
   "coverage",
   "maturin",
   "pandas>=2.3.3",
+  "prek",
   "pytest>=8",
   "tabulate>=0.9",
   "ty",
