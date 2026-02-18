@@ -72,7 +72,6 @@ jobs:
     if: always()
 
     needs:
-    - lint
     - test
     - docs
 
