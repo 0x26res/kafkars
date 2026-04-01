@@ -1,7 +1,7 @@
 [dependencies]
 arrow = {version = "57.1.0", features = ["pyarrow"]}
 pyo3 = {version = "0.26.0", features = ["abi3-py310"]}
-rdkafka = "0.38.0"
+rdkafka = "0.39.0"
 
 [lib]
 crate-type = ["cdylib"]
