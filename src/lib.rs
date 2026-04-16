@@ -119,11 +119,12 @@ struct PyConsumerManager {
 #[pymethods]
 impl PyConsumerManager {
     #[new]
+    #[pyo3(signature = (config, topics, cutoff_ms=None, batch_size=None))]
     fn new(
         config: HashMap<String, String>,
         topics: Vec<PySourceTopic>,
-        cutoff_ms: i64,
-        batch_size: usize,
+        cutoff_ms: Option<i64>,
+        batch_size: Option<usize>,
     ) -> PyResult<Self> {
         let source_topics: Vec<SourceTopic> = topics.into_iter().map(|t| t.0).collect();
 

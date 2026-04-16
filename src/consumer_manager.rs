@@ -206,10 +206,10 @@ impl ConsumerManager {
     }
 
     pub fn create(
-        config: HashMap<String, String>,
+        mut config: HashMap<String, String>,
         source_topics: Vec<SourceTopic>,
-        cutoff_ms: i64,
-        batch_size: usize,
+        cutoff_ms: Option<i64>,
+        batch_size: Option<usize>,
     ) -> Result<Self, String> {
         // Validate that topic names are unique
         let mut seen_topics = HashSet::new();
@@ -218,6 +218,22 @@ impl ConsumerManager {
                 return Err(format!("duplicate topic: '{}'", topic.name));
             }
         }
+
+        // Default group.id to a random UUID if not provided
+        config
+            .entry("group.id".to_string())
+            .or_insert_with(|| uuid::Uuid::new_v4().to_string());
+
+        // Default cutoff_ms to now
+        let cutoff_ms = cutoff_ms.unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock before epoch")
+                .as_millis() as i64
+        });
+
+        // Default batch_size to 10_000
+        let batch_size = batch_size.unwrap_or(10_000);
 
         let mut client_config = ClientConfig::new();
         for (key, value) in &config {
@@ -692,7 +708,7 @@ mod tests {
             SourceTopic::from_earliest("topic_1".to_string()),
         ];
 
-        let result = ConsumerManager::create(config, topics, 0, 100);
+        let result = ConsumerManager::create(config, topics, Some(0), Some(100));
         match result {
             Err(e) => assert!(
                 e.contains("duplicate topic"),
