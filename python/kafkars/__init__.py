@@ -1,8 +1,8 @@
-from kafkars._lib import __version__  # type: ignore[unresolved-import]
-from kafkars._lib import PyConsumerManager as ConsumerManager  # type: ignore[unresolved-import]
-from kafkars._lib import get_message_schema  # type: ignore[unresolved-import]
-from kafkars._lib import get_partition_state_schema  # type: ignore[unresolved-import]
-from kafkars._lib import validate_source_topic  # type: ignore[unresolved-import]
+from kafkars._lib import __version__  # ty: ignore[unresolved-import]
+from kafkars._lib import PyConsumerManager as ConsumerManager  # ty: ignore[unresolved-import]
+from kafkars._lib import get_message_schema  # ty: ignore[unresolved-import]
+from kafkars._lib import get_partition_state_schema  # ty: ignore[unresolved-import]
+from kafkars._lib import validate_source_topic  # ty: ignore[unresolved-import]
 from kafkars.schema import MESSAGE_SCHEMA, PARTITION_STATE_SCHEMA
 from kafkars.source_topic import SourceTopic
 
