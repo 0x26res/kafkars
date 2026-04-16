@@ -62,7 +62,6 @@ pip install kafkars
 ## Quick Start
 
 ```python
-import time
 from kafkars import ConsumerManager, SourceTopic
 
 # Define source topics with offset policies
@@ -73,13 +72,8 @@ topics = [
 
 # Create consumer
 manager = ConsumerManager(
-    config={
-        "bootstrap.servers": "localhost:9092",
-        "group.id": "my-consumer-group",
-    },
+    config={"bootstrap.servers": "localhost:9092"},
     topics=topics,
-    cutoff_ms=time.time_ns() // 1_000_000,
-    batch_size=10_000,
 )
 
 # Poll returns PyArrow RecordBatch
