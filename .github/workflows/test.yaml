@@ -28,20 +28,17 @@ jobs:
       with:
         version: "0.7.19"
 
-
-    - name: Install grcov
-      run: cargo install grcov
+    - uses: extractions/setup-just@v2
 
     - name: Build
-      run: |
-        make develop
+      run: just develop
 
     - name: Run prek
       if: matrix.python == '3.12'
-      run: make lint
+      run: just lint
 
     - name: Run coverage
-      run: make coverage
+      run: just coverage
 
     - name: Upload coverage to Codecov
       if: matrix.python == '3.12'
