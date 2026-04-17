@@ -2,10 +2,13 @@
 arrow = {version = "57.1.0", features = ["pyarrow"]}
 pyo3 = {version = "0.26.0", features = ["abi3-py310"]}
 rdkafka = "0.38.0"
+serde = {version = "1.0", features = ["derive"], optional = true}
+serde_json = {version = "1.0", optional = true}
 uuid = {version = "1", features = ["v4"]}
 
 [features]
-testing = []
+default = ["testing"]
+testing = ["serde", "serde_json"]
 
 [lib]
 crate-type = ["cdylib"]

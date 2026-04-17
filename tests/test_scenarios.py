@@ -90,6 +90,16 @@ class TestScenarioFiles:
         result = run_scenario_file(SCENARIOS_DIR / "live_detection.json")
         result.assert_passed()
 
+    def test_single_partition_live(self):
+        """Single partition becomes live after consuming its only message."""
+        result = run_scenario_file(SCENARIOS_DIR / "single_partition_live.json")
+        result.assert_passed()
+
+    def test_single_partition_delayed_live(self):
+        """Single partition not live until message actually arrives."""
+        result = run_scenario_file(SCENARIOS_DIR / "single_partition_delayed_live.json")
+        result.assert_passed()
+
 
 class TestErrorHandling:
     """Test error handling in the testing framework."""

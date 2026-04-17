@@ -594,6 +594,8 @@ dependencies = [
  "arrow",
  "pyo3",
  "rdkafka",
+ "serde",
+ "serde_json",
  "uuid",
 ]
 
