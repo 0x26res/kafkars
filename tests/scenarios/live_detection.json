@@ -13,18 +13,18 @@
   },
   "batches": [
     {
-      "description": "Partition 0 reaches end offset - becomes live but messages held by p1's low water mark (400ms)",
+      "description": "Partition 0 consumed to end but messages held by p1's low water mark - not yet live",
       "poll": {"events": {"0": [0, 1], "1": [0]}},
       "expected_released": [
         {"topic": "events", "partition": 1, "offset": 0}
       ],
       "expected_partition_state": [
-        {"topic": "events", "partition": 0, "consumed_offset": 1, "released_offset": 0, "is_live": true},
+        {"topic": "events", "partition": 0, "consumed_offset": 1, "released_offset": 0, "is_live": false},
         {"topic": "events", "partition": 1, "consumed_offset": 0, "released_offset": 0, "is_live": false}
       ]
     },
     {
-      "description": "Partition 1 advances to 700ms - low water mark now 700, all held messages released",
+      "description": "Partition 1 advances - p0 messages released, p0 becomes live",
       "poll": {"events": {"1": [1]}},
       "expected_released": [
         {"topic": "events", "partition": 0, "offset": 0},

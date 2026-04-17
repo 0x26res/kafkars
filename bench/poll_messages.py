@@ -31,7 +31,7 @@ class BatchProcessor:
         """Process a batch, checking invariants and displaying results."""
         self._check_batch_size(batch)
         self._check_timestamp_ordering(batch, is_live)
-        self._display(batch, state)
+        self._display(batch, state, is_live)
         self.batch_count += 1
         self.total_messages += batch.num_rows
 
@@ -62,7 +62,9 @@ class BatchProcessor:
 
         self.prev_max_timestamp = current_max_ts
 
-    def _display(self, batch: pa.RecordBatch, state: pa.RecordBatch) -> None:
+    def _display(
+        self, batch: pa.RecordBatch, state: pa.RecordBatch, is_live: bool
+    ) -> None:
         typer.echo(f"\n{batch.to_pandas().to_markdown()}")
 
         consumed = pc.sum(state.column("consumed_offset")).as_py()
@@ -70,7 +72,7 @@ class BatchProcessor:
         pending = consumed - released
 
         typer.secho(
-            f"\n{batch.num_rows} message(s) received, {pending} pending",
+            f"\n{batch.num_rows} message(s) received, {pending}, is_live={is_live}",
             fg=typer.colors.YELLOW,
             bold=True,
         )

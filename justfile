@@ -37,7 +37,7 @@ dist: env
 
 # Format and lint
 lint:
-    . .venv/bin/activate && cargo fmt && cargo clippy -- -D warnings && prek run --all-files
+    . .venv/bin/activate && cargo fmt && cargo clippy --all-targets -- -D warnings && prek run --all-files
 
 # Install coverage tools
 coverage-env:
