@@ -23,12 +23,6 @@ pub struct BatchResult {
     pub description: String,
     /// Whether this batch passed all checks.
     pub passed: bool,
-    /// Whether released messages matched expected.
-    pub released_match: bool,
-    /// Whether partition state matched expected.
-    pub state_match: bool,
-    /// Whether all batch messages were consumed.
-    pub all_consumed: bool,
     /// Detailed error messages for failures.
     pub errors: Vec<String>,
 }
@@ -187,9 +181,6 @@ pub fn run_scenario(scenario: &TestScenario) -> TestResult {
             batch_index: idx,
             description: batch.description.clone(),
             passed,
-            released_match,
-            state_match,
-            all_consumed,
             errors,
         });
     }
@@ -202,10 +193,73 @@ pub fn run_scenario(scenario: &TestScenario) -> TestResult {
     }
 }
 
+/// Run a split-format scenario from files under `tests/`, panicking with
+/// details on failure. `scenario` and `data` are file stems (without path or
+/// extension) resolved to `tests/scenarios/{scenario}.json` and
+/// `tests/data/{data}.json`.
+pub fn assert_scenario(scenario: &str, data: &str) {
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+    let scenario_json =
+        std::fs::read_to_string(base.join("scenarios").join(format!("{scenario}.json")))
+            .unwrap_or_else(|e| panic!("failed to read scenario '{scenario}': {e}"));
+    let data_json = std::fs::read_to_string(base.join("data").join(format!("{data}.json")))
+        .unwrap_or_else(|e| panic!("failed to read data '{data}': {e}"));
+
+    let spec = crate::test_scenario::ScenarioSpec::from_json(&scenario_json)
+        .expect("invalid scenario JSON");
+    let topic_data: crate::test_scenario::TopicData =
+        serde_json::from_str(&data_json).expect("invalid data JSON");
+    let resolved = spec
+        .resolve(&topic_data)
+        .expect("scenario resolution failed");
+    let result = run_scenario(&resolved);
+    assert!(
+        result.passed,
+        "Scenario '{}' failed:\n{}",
+        resolved.name,
+        result
+            .batch_results
+            .iter()
+            .filter(|b| !b.passed)
+            .map(|b| format!(
+                "  batch {} ({}): {}",
+                b.batch_index,
+                b.description,
+                b.errors.join(", ")
+            ))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_scenario::TestScenario;
+
+    // --- File-based scenario tests ---
+
+    #[test]
+    fn test_basic_ordering() {
+        assert_scenario("basic_ordering", "two_partition_ordering");
+    }
+
+    #[test]
+    fn test_live_detection() {
+        assert_scenario("live_detection", "live_detection_events");
+    }
+
+    #[test]
+    fn test_single_partition_live() {
+        assert_scenario("single_partition_live", "single_partition");
+    }
+
+    #[test]
+    fn test_single_partition_delayed_live() {
+        assert_scenario("single_partition_delayed_live", "single_partition");
+    }
+
+    // --- Inline scenario tests ---
 
     #[test]
     fn test_run_simple_scenario() {

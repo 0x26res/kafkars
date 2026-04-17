@@ -1,6 +1,5 @@
 {
   "name": "Partition becomes live at cutoff or end offset",
-  "data": "live_detection_events.json",
   "config": {
     "topics": {
       "events": {

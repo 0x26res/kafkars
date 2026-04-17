@@ -1,6 +1,5 @@
 {
   "name": "Single partition becomes live after consuming last message",
-  "data": "single_partition.json",
   "config": {
     "topics": {"events": {"partitions": [0]}},
     "cutoff_ms": 9999,

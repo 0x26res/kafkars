@@ -1,6 +1,5 @@
 {
   "name": "Basic two-partition timestamp ordering",
-  "data": "two_partition_ordering.json",
   "config": {
     "topics": {
       "events": {

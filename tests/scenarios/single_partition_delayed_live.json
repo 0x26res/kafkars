@@ -1,6 +1,5 @@
 {
   "name": "Single partition not live until message arrives",
-  "data": "single_partition.json",
   "config": {
     "topics": {"events": {"partitions": [0]}},
     "cutoff_ms": 9999,

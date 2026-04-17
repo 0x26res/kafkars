@@ -3,10 +3,10 @@ pub mod consumer_trait;
 pub mod mock_consumer;
 pub mod source_topic;
 
-#[cfg(feature = "testing")]
-pub mod test_runner;
-#[cfg(feature = "testing")]
-pub mod test_scenario;
+#[cfg(test)]
+mod test_runner;
+#[cfg(test)]
+mod test_scenario;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -272,93 +272,6 @@ fn get_partition_state_schema(py: Python<'_>) -> PyResult<Py<PyAny>> {
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
 }
 
-// Testing module Python bindings (only available with "testing" feature)
-#[cfg(feature = "testing")]
-mod testing_bindings {
-    use super::*;
-
-    /// Python wrapper for batch test result.
-    #[pyclass]
-    #[derive(Clone)]
-    pub struct PyBatchResult {
-        #[pyo3(get)]
-        pub batch_index: usize,
-        #[pyo3(get)]
-        pub description: String,
-        #[pyo3(get)]
-        pub passed: bool,
-        #[pyo3(get)]
-        pub released_match: bool,
-        #[pyo3(get)]
-        pub state_match: bool,
-        #[pyo3(get)]
-        pub all_consumed: bool,
-        #[pyo3(get)]
-        pub errors: Vec<String>,
-    }
-
-    /// Python wrapper for test result.
-    #[pyclass]
-    pub struct PyTestResult {
-        #[pyo3(get)]
-        pub passed: bool,
-        #[pyo3(get)]
-        pub batch_results: Vec<PyBatchResult>,
-    }
-
-    fn to_py_result(result: test_runner::TestResult) -> PyTestResult {
-        PyTestResult {
-            passed: result.passed,
-            batch_results: result
-                .batch_results
-                .into_iter()
-                .map(|br| PyBatchResult {
-                    batch_index: br.batch_index,
-                    description: br.description,
-                    passed: br.passed,
-                    released_match: br.released_match,
-                    state_match: br.state_match,
-                    all_consumed: br.all_consumed,
-                    errors: br.errors,
-                })
-                .collect(),
-        }
-    }
-
-    /// Run a test scenario from JSON and return the results.
-    #[pyfunction]
-    pub fn run_test_scenario(scenario_json: &str) -> PyResult<PyTestResult> {
-        let scenario = test_scenario::TestScenario::from_json(scenario_json).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid scenario JSON: {}", e))
-        })?;
-
-        let result = test_runner::run_scenario(&scenario);
-        Ok(to_py_result(result))
-    }
-
-    /// Run a split-format test scenario (scenario + data) and return the results.
-    #[pyfunction]
-    pub fn run_test_scenario_with_data(
-        scenario_json: &str,
-        data_json: &str,
-    ) -> PyResult<PyTestResult> {
-        let spec = test_scenario::ScenarioSpec::from_json(scenario_json).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid scenario JSON: {}", e))
-        })?;
-
-        let data: test_scenario::TopicData = serde_json::from_str(data_json).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid data JSON: {}", e))
-        })?;
-
-        let scenario = spec.resolve(&data).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Resolution error: {}", e))
-        })?;
-
-        let result = test_runner::run_scenario(&scenario);
-        Ok(to_py_result(result))
-    }
-}
-
 /// Version from Cargo.toml, set at compile time.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -369,18 +282,5 @@ fn _lib(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate_source_topic, m)?)?;
     m.add_function(wrap_pyfunction!(get_message_schema, m)?)?;
     m.add_function(wrap_pyfunction!(get_partition_state_schema, m)?)?;
-
-    // Testing bindings (only available with "testing" feature)
-    #[cfg(feature = "testing")]
-    {
-        m.add_class::<testing_bindings::PyTestResult>()?;
-        m.add_class::<testing_bindings::PyBatchResult>()?;
-        m.add_function(wrap_pyfunction!(testing_bindings::run_test_scenario, m)?)?;
-        m.add_function(wrap_pyfunction!(
-            testing_bindings::run_test_scenario_with_data,
-            m
-        )?)?;
-    }
-
     Ok(())
 }

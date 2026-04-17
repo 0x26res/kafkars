@@ -174,9 +174,6 @@ pub struct ScenarioBatch {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ScenarioSpec {
     pub name: String,
-    /// Filename of the data file (resolved externally by Python).
-    #[serde(default)]
-    pub data: Option<String>,
     pub config: ScenarioConfig,
     pub batches: Vec<ScenarioBatch>,
 }
