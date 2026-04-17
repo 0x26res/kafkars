@@ -80,12 +80,12 @@ mod tests {
 
     #[test]
     fn test_from_start_of_day() {
-        let topic = SourceTopic::from_start_of_day("my-topic", 3600_000, "UTC");
+        let topic = SourceTopic::from_start_of_day("my-topic", 3_600_000, "UTC");
         assert_eq!(topic.name, "my-topic");
         assert_eq!(
             topic.offset_policy,
             OffsetPolicy::StartOfDay {
-                time_ms: 3600_000,
+                time_ms: 3_600_000,
                 timezone: "UTC".to_string()
             }
         );

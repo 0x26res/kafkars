@@ -1,0 +1,27 @@
+{
+  "name": "Basic two-partition timestamp ordering",
+  "config": {
+    "topics": {
+      "events": {
+        "partitions": [0, 1],
+        "end_offsets": {"0": 100, "1": 100}
+      }
+    },
+    "cutoff_ms": 2000,
+    "batch_size": 10
+  },
+  "batches": [
+    {
+      "description": "Messages with interleaved timestamps - release up to low water mark",
+      "poll": {"events": {"0": [0, 1], "1": [0, 1]}},
+      "expected_released": [
+        {"topic": "events", "partition": 1, "offset": 0},
+        {"topic": "events", "partition": 1, "offset": 1}
+      ],
+      "expected_partition_state": [
+        {"topic": "events", "partition": 0, "consumed_offset": 1, "released_offset": 0, "is_live": false},
+        {"topic": "events", "partition": 1, "consumed_offset": 1, "released_offset": 1, "is_live": false}
+      ]
+    }
+  ]
+}

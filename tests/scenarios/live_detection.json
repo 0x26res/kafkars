@@ -1,0 +1,50 @@
+{
+  "name": "Partition becomes live at cutoff or end offset",
+  "config": {
+    "topics": {
+      "events": {
+        "partitions": [0, 1],
+        "end_offsets": {"1": 100}
+      }
+    },
+    "cutoff_ms": 1000,
+    "batch_size": 10
+  },
+  "batches": [
+    {
+      "description": "Partition 0 consumed to end but messages held by p1's low water mark - not yet live",
+      "poll": {"events": {"0": [0, 1], "1": [0]}},
+      "expected_released": [
+        {"topic": "events", "partition": 1, "offset": 0}
+      ],
+      "expected_partition_state": [
+        {"topic": "events", "partition": 0, "consumed_offset": 1, "released_offset": 0, "is_live": false},
+        {"topic": "events", "partition": 1, "consumed_offset": 0, "released_offset": 0, "is_live": false}
+      ]
+    },
+    {
+      "description": "Partition 1 advances - p0 messages released, p0 becomes live",
+      "poll": {"events": {"1": [1]}},
+      "expected_released": [
+        {"topic": "events", "partition": 0, "offset": 0},
+        {"topic": "events", "partition": 0, "offset": 1},
+        {"topic": "events", "partition": 1, "offset": 1}
+      ],
+      "expected_partition_state": [
+        {"topic": "events", "partition": 0, "consumed_offset": 1, "released_offset": 1, "is_live": true},
+        {"topic": "events", "partition": 1, "consumed_offset": 1, "released_offset": 1, "is_live": false}
+      ]
+    },
+    {
+      "description": "Partition 1 reaches cutoff (1000ms) - becomes live",
+      "poll": {"events": {"1": [2]}},
+      "expected_released": [
+        {"topic": "events", "partition": 1, "offset": 2}
+      ],
+      "expected_partition_state": [
+        {"topic": "events", "partition": 0, "is_live": true},
+        {"topic": "events", "partition": 1, "consumed_offset": 2, "released_offset": 2, "is_live": true}
+      ]
+    }
+  ]
+}

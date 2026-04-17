@@ -1,5 +1,12 @@
 pub mod consumer_manager;
+pub mod consumer_trait;
+pub mod mock_consumer;
 pub mod source_topic;
+
+#[cfg(test)]
+mod test_runner;
+#[cfg(test)]
+mod test_scenario;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,7 +18,7 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::pyarrow::ToPyArrow;
-use consumer_manager::ConsumerManager;
+use consumer_manager::RealConsumerManager;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use source_topic::SourceTopic;
@@ -111,7 +118,7 @@ fn partition_state_schema() -> Schema {
 
 #[pyclass]
 struct PyConsumerManager {
-    manager: ConsumerManager,
+    manager: RealConsumerManager,
     message_schema: Arc<Schema>,
     partition_state_schema: Arc<Schema>,
 }
@@ -128,7 +135,7 @@ impl PyConsumerManager {
     ) -> PyResult<Self> {
         let source_topics: Vec<SourceTopic> = topics.into_iter().map(|t| t.0).collect();
 
-        let manager = ConsumerManager::create(config, source_topics, cutoff_ms, batch_size)
+        let manager = RealConsumerManager::create(config, source_topics, cutoff_ms, batch_size)
             .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
 
         Ok(Self {

@@ -1,0 +1,20 @@
+{
+  "name": "Single partition becomes live after consuming last message",
+  "config": {
+    "topics": {"events": {"partitions": [0]}},
+    "cutoff_ms": 9999,
+    "batch_size": 10
+  },
+  "batches": [
+    {
+      "description": "Consume the only message - partition reaches end offset and becomes live",
+      "poll": {"events": {"0": [0]}},
+      "expected_released": [
+        {"topic": "events", "partition": 0, "offset": 0}
+      ],
+      "expected_partition_state": [
+        {"topic": "events", "partition": 0, "consumed_offset": 0, "is_live": true}
+      ]
+    }
+  ]
+}

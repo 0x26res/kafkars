@@ -31,7 +31,7 @@ class BatchProcessor:
         """Process a batch, checking invariants and displaying results."""
         self._check_batch_size(batch)
         self._check_timestamp_ordering(batch, is_live)
-        self._display(batch, state)
+        self._display(batch, state, is_live)
         self.batch_count += 1
         self.total_messages += batch.num_rows
 
@@ -62,7 +62,9 @@ class BatchProcessor:
 
         self.prev_max_timestamp = current_max_ts
 
-    def _display(self, batch: pa.RecordBatch, state: pa.RecordBatch) -> None:
+    def _display(
+        self, batch: pa.RecordBatch, state: pa.RecordBatch, is_live: bool
+    ) -> None:
         typer.echo(f"\n{batch.to_pandas().to_markdown()}")
 
         consumed = pc.sum(state.column("consumed_offset")).as_py()
@@ -70,7 +72,7 @@ class BatchProcessor:
         pending = consumed - released
 
         typer.secho(
-            f"\n{batch.num_rows} message(s) received, {pending} pending",
+            f"\n{batch.num_rows} message(s) received, {pending}, is_live={is_live}",
             fg=typer.colors.YELLOW,
             bold=True,
         )
@@ -132,7 +134,7 @@ def parse_topic(topic_spec: str):
 @app.command()
 def poll(
     bootstrap_servers: str = typer.Option(
-        ...,
+        "localhost:9092",
         "--bootstrap-servers",
         help="Kafka bootstrap servers (e.g., localhost:9092)",
     ),
@@ -142,18 +144,19 @@ def poll(
         help="Topics with policy: topic:policy[:time_ms]. "
         "Policies: latest, earliest, relative_time, absolute_time. "
         "Can be specified multiple times.",
+        default_factory=lambda: ["test:earliest"],
     ),
     timeout_ms: int = typer.Option(
-        1000, "--timeout", help="Poll timeout in milliseconds"
+        1_000, "--timeout", help="Poll timeout in milliseconds"
     ),
     max_batches: Optional[int] = typer.Option(
         None, "--max-batches", help="Maximum number of batches to consume"
     ),
     batch_size: int = typer.Option(
-        1000, "--batch-size", help="Maximum messages per batch"
+        10_000, "--batch-size", help="Maximum messages per batch"
     ),
     show_state: bool = typer.Option(
-        False, "--show-state", help="Show partition state after each poll"
+        True, "--show-state", help="Show partition state after each poll"
     ),
 ) -> None:
     """Poll messages from Kafka topics and display them as markdown tables."""
@@ -184,7 +187,6 @@ def poll(
     try:
         while True:
             batch = manager.poll(timeout_ms)
-
             if batch.num_rows > 0:
                 state = manager.partition_state()
                 processor.process(batch, state, manager.is_live())

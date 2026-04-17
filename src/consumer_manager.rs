@@ -1,12 +1,12 @@
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer};
-use rdkafka::message::{BorrowedMessage, Message};
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::TopicPartitionList;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::consumer_trait::{KafkaConsumer, MessageExtractor};
 use crate::source_topic::{OffsetPolicy, SourceTopic};
 
 /// Immutable record of the resolved offsets for a partition at creation time.
@@ -27,7 +27,8 @@ pub struct StartOffsets {
 }
 
 impl StartOffsets {
-    fn new(offsets: Vec<PartitionStartOffset>) -> Self {
+    /// Create a new StartOffsets from a vector of partition start offsets.
+    pub fn from_vec(offsets: Vec<PartitionStartOffset>) -> Self {
         Self {
             offsets: Arc::new(offsets),
         }
@@ -62,7 +63,9 @@ pub struct PartitionInfo {
     pub released_offset: i64,
     /// Timestamp of last consumed message.
     pub timestamp_ms: Option<i64>,
-    /// Whether this partition has caught up to replay_end_offset or cutoff.
+    /// Internal: whether consumption has caught up (used for ordering/backpressure).
+    pub is_caught_up: bool,
+    /// Whether this partition is live from the caller's perspective (based on released messages).
     pub is_live: bool,
     /// Whether this partition is currently paused due to backpressure.
     pub is_paused: bool,
@@ -76,6 +79,7 @@ impl PartitionInfo {
             consumed_offset: start_offset,
             released_offset: start_offset,
             timestamp_ms: None,
+            is_caught_up: false,
             is_live: false,
             is_paused: false,
         }
@@ -85,12 +89,12 @@ impl PartitionInfo {
 // --- Pure helper functions for pause/resume logic (testable without Kafka) ---
 
 /// Calculate the low water mark from partition info.
-/// Only considers partitions that are not live and not paused.
+/// Only considers partitions that are not caught up and not paused.
 pub fn calculate_low_water_mark<'a>(
     partitions: impl Iterator<Item = &'a PartitionInfo>,
 ) -> Option<i64> {
     partitions
-        .filter(|p| !p.is_live && !p.is_paused)
+        .filter(|p| !p.is_caught_up && !p.is_paused)
         .filter_map(|p| p.timestamp_ms)
         .min()
 }
@@ -98,7 +102,7 @@ pub fn calculate_low_water_mark<'a>(
 /// Determine if paused partitions should be resumed.
 /// Returns true if:
 /// 1. Buffer has drained below batch_size, OR
-/// 2. All non-paused partitions are live (no progress can be made without resuming)
+/// 2. All non-paused partitions are caught up (no progress can be made without resuming)
 pub fn should_resume_partitions<'a>(
     partitions: impl Iterator<Item = &'a PartitionInfo>,
     held_count: usize,
@@ -108,8 +112,8 @@ pub fn should_resume_partitions<'a>(
         return true;
     }
 
-    // Check if all non-paused partitions are live
-    partitions.filter(|p| !p.is_paused).all(|p| p.is_live)
+    // Check if all non-paused partitions are caught up
+    partitions.filter(|p| !p.is_paused).all(|p| p.is_caught_up)
 }
 
 /// Identify partitions that should be paused based on low water mark.
@@ -157,8 +161,8 @@ impl ConsumerMetrics {
 }
 
 /// Manages Kafka consumer with partition tracking, message buffering, and backpressure.
-pub struct ConsumerManager {
-    consumer: BaseConsumer,
+pub struct ConsumerManager<C: KafkaConsumer> {
+    consumer: C,
     topic_names: Vec<String>,
     start_offsets: StartOffsets,
     cutoff_ms: i64,
@@ -171,9 +175,12 @@ pub struct ConsumerManager {
     metrics: ConsumerMetrics,
 }
 
-impl ConsumerManager {
+/// Type alias for production use with real Kafka consumer.
+pub type RealConsumerManager = ConsumerManager<BaseConsumer>;
+
+impl<C: KafkaConsumer> ConsumerManager<C> {
     fn new(
-        consumer: BaseConsumer,
+        consumer: C,
         topic_names: Vec<String>,
         start_offsets: StartOffsets,
         cutoff_ms: i64,
@@ -184,8 +191,13 @@ impl ConsumerManager {
             .iter()
             .map(|so| {
                 let key = (so.topic.clone(), so.partition);
-                let info =
+                let mut info =
                     PartitionInfo::new(so.topic.clone(), so.partition, so.replay_start_offset);
+                // Nothing to consume: partition is already caught up and live
+                if so.replay_start_offset >= so.replay_end_offset {
+                    info.is_caught_up = true;
+                    info.is_live = true;
+                }
                 (key, info)
             })
             .collect();
@@ -205,6 +217,25 @@ impl ConsumerManager {
         }
     }
 
+    /// Create a ConsumerManager with pre-resolved configuration.
+    /// This is the entry point for testing with mock consumers.
+    pub fn from_resolved(
+        consumer: C,
+        start_offsets: StartOffsets,
+        topic_names: Vec<String>,
+        cutoff_ms: i64,
+        batch_size: usize,
+    ) -> Self {
+        Self::new(consumer, topic_names, start_offsets, cutoff_ms, batch_size)
+    }
+
+    /// Get a reference to the underlying consumer.
+    pub fn consumer(&self) -> &C {
+        &self.consumer
+    }
+}
+
+impl ConsumerManager<BaseConsumer> {
     pub fn create(
         mut config: HashMap<String, String>,
         source_topics: Vec<SourceTopic>,
@@ -300,29 +331,29 @@ impl ConsumerManager {
             .map_err(|e| e.to_string())?;
         }
 
-        consumer.assign(&tpl).map_err(|e| e.to_string())?;
+        Consumer::assign(&consumer, &tpl).map_err(|e| e.to_string())?;
 
         // Explicitly seek to the start offset for each partition.
         // assign() alone doesn't reliably position the consumer at the specified offset.
         let seek_timeout = Duration::from_secs(5);
         for pso in &resolved_offsets {
-            consumer
-                .seek(
-                    &pso.topic,
-                    pso.partition,
-                    Offset::Offset(pso.replay_start_offset),
-                    seek_timeout,
+            Consumer::seek(
+                &consumer,
+                &pso.topic,
+                pso.partition,
+                Offset::Offset(pso.replay_start_offset),
+                seek_timeout,
+            )
+            .map_err(|e| {
+                format!(
+                    "failed to seek {}:{} to offset {}: {}",
+                    pso.topic, pso.partition, pso.replay_start_offset, e
                 )
-                .map_err(|e| {
-                    format!(
-                        "failed to seek {}:{} to offset {}: {}",
-                        pso.topic, pso.partition, pso.replay_start_offset, e
-                    )
-                })?;
+            })?;
         }
 
         let topic_names = source_topics.into_iter().map(|t| t.name).collect();
-        let start_offsets = StartOffsets::new(resolved_offsets);
+        let start_offsets = StartOffsets::from_vec(resolved_offsets);
         Ok(Self::new(
             consumer,
             topic_names,
@@ -407,7 +438,12 @@ impl ConsumerManager {
             ))
         }
     }
+}
 
+impl<C: KafkaConsumer> ConsumerManager<C>
+where
+    for<'a> C::Message<'a>: MessageExtractor,
+{
     pub fn poll(&mut self, timeout: Duration) -> Result<Vec<TimestampedMessage>, String> {
         // First poll with the given timeout
         if !self.poll_one(timeout)? {
@@ -431,31 +467,33 @@ impl ConsumerManager {
     /// Polls for a single message. Returns Ok(true) if a message was received,
     /// Ok(false) if no message, or Err if an error occurred.
     fn poll_one(&mut self, timeout: Duration) -> Result<bool, String> {
-        let polled = self.consumer.poll(timeout);
-        if let Some(result) = polled {
-            match result {
-                Ok(msg) => {
-                    if let Some(timestamped) = Self::extract_message(&msg) {
-                        self.update_partition_info(&timestamped);
-                        self.held_messages.push(timestamped);
-                        self.metrics.messages_consumed += 1;
-                        return Ok(true);
-                    }
-                }
-                Err(e) => {
-                    return Err(format!(
-                        "{} (subscribed topics: {})",
-                        e,
-                        self.topic_names.join(", ")
-                    ));
-                }
+        // Extract message data immediately to release the borrow on consumer
+        let extracted = {
+            let polled = self.consumer.poll(timeout);
+            match polled {
+                Some(Ok(msg)) => Ok(Self::extract_message_generic(&msg)),
+                Some(Err(e)) => Err(format!(
+                    "{} (subscribed topics: {})",
+                    e,
+                    self.topic_names.join(", ")
+                )),
+                None => Ok(None),
             }
+        };
+
+        match extracted? {
+            Some(timestamped) => {
+                self.update_partition_info(&timestamped);
+                self.held_messages.push(timestamped);
+                self.metrics.messages_consumed += 1;
+                Ok(true)
+            }
+            None => Ok(false),
         }
-        Ok(false)
     }
 
-    fn extract_message(msg: &BorrowedMessage) -> Option<TimestampedMessage> {
-        let timestamp_ms = msg.timestamp().to_millis()?;
+    fn extract_message_generic<M: MessageExtractor>(msg: &M) -> Option<TimestampedMessage> {
+        let timestamp_ms = msg.timestamp_ms()?;
 
         Some(TimestampedMessage {
             key: msg.key().map(|k| k.to_vec()),
@@ -472,16 +510,13 @@ impl ConsumerManager {
         if let Some(info) = self.partition_info.get_mut(&key) {
             info.consumed_offset = msg.offset;
             info.timestamp_ms = Some(msg.timestamp_ms);
-            // A partition is live if either:
-            // 1. Message timestamp is >= cutoff time, OR
-            // 2. We've reached the end offset captured at creation time
             let replay_end_offset = self
                 .start_offsets
                 .get_replay_end_offset(&msg.topic, msg.partition)
                 .unwrap_or(i64::MAX);
-            // offset is 0-indexed, replay_end_offset is the next offset to be written
-            // so we're caught up when current_offset + 1 >= replay_end_offset
-            info.is_live =
+            // Caught up internally when consumption reaches end offset or cutoff.
+            // This drives ordering/backpressure decisions.
+            info.is_caught_up =
                 msg.timestamp_ms >= self.cutoff_ms || (msg.offset + 1) >= replay_end_offset;
         }
     }
@@ -490,9 +525,13 @@ impl ConsumerManager {
         self.low_water_mark_ms = calculate_low_water_mark(self.partition_info.values());
     }
 
+    fn is_caught_up(&self) -> bool {
+        !self.partition_info.is_empty() && self.partition_info.values().all(|p| p.is_caught_up)
+    }
+
     fn get_limit(&self) -> i64 {
-        // If all partitions are live, release all messages (no timestamp limit)
-        if self.is_live() {
+        // If all partitions are caught up, release all messages (no timestamp limit)
+        if self.is_caught_up() {
             return i64::MAX;
         }
 
@@ -517,11 +556,17 @@ impl ConsumerManager {
         let released: Vec<TimestampedMessage> =
             self.held_messages.drain(0..release_count).collect();
 
-        // Update released_offset for each partition
+        // Update released_offset and is_live for each partition
         for msg in &released {
             let key = (msg.topic.clone(), msg.partition);
             if let Some(info) = self.partition_info.get_mut(&key) {
                 info.released_offset = msg.offset;
+                let replay_end_offset = self
+                    .start_offsets
+                    .get_replay_end_offset(&msg.topic, msg.partition)
+                    .unwrap_or(i64::MAX);
+                info.is_live =
+                    msg.timestamp_ms >= self.cutoff_ms || (msg.offset + 1) >= replay_end_offset;
             }
         }
 
@@ -639,12 +684,13 @@ mod tests {
         assert_eq!(info.released_offset, 100);
         assert!(!info.is_paused);
         assert!(info.timestamp_ms.is_none());
+        assert!(!info.is_caught_up);
         assert!(!info.is_live);
     }
 
     #[test]
     fn test_start_offsets() {
-        let offsets = StartOffsets::new(vec![
+        let offsets = StartOffsets::from_vec(vec![
             PartitionStartOffset {
                 topic: "topic_1".to_string(),
                 partition: 0,
@@ -725,7 +771,7 @@ mod tests {
         topic: &str,
         partition: i32,
         timestamp_ms: Option<i64>,
-        is_live: bool,
+        is_caught_up: bool,
         is_paused: bool,
     ) -> PartitionInfo {
         PartitionInfo {
@@ -734,14 +780,15 @@ mod tests {
             consumed_offset: 0,
             released_offset: 0,
             timestamp_ms,
-            is_live,
+            is_caught_up,
+            is_live: false,
             is_paused,
         }
     }
 
     #[test]
     fn test_calculate_low_water_mark_basic() {
-        let partitions = vec![
+        let partitions = [
             make_partition("t1", 0, Some(100), false, false),
             make_partition("t1", 1, Some(200), false, false),
             make_partition("t1", 2, Some(300), false, false),
@@ -752,20 +799,20 @@ mod tests {
     }
 
     #[test]
-    fn test_calculate_low_water_mark_excludes_live() {
-        let partitions = vec![
-            make_partition("t1", 0, Some(100), true, false), // live - excluded
+    fn test_calculate_low_water_mark_excludes_caught_up() {
+        let partitions = [
+            make_partition("t1", 0, Some(100), true, false), // caught up - excluded
             make_partition("t1", 1, Some(200), false, false),
             make_partition("t1", 2, Some(300), false, false),
         ];
 
         let lwm = calculate_low_water_mark(partitions.iter());
-        assert_eq!(lwm, Some(200)); // 100 is excluded because partition is live
+        assert_eq!(lwm, Some(200)); // 100 is excluded because partition is caught up
     }
 
     #[test]
     fn test_calculate_low_water_mark_excludes_paused() {
-        let partitions = vec![
+        let partitions = [
             make_partition("t1", 0, Some(100), false, true), // paused - excluded
             make_partition("t1", 1, Some(200), false, false),
             make_partition("t1", 2, Some(300), false, false),
@@ -776,19 +823,19 @@ mod tests {
     }
 
     #[test]
-    fn test_calculate_low_water_mark_all_live() {
-        let partitions = vec![
+    fn test_calculate_low_water_mark_all_caught_up() {
+        let partitions = [
             make_partition("t1", 0, Some(100), true, false),
             make_partition("t1", 1, Some(200), true, false),
         ];
 
         let lwm = calculate_low_water_mark(partitions.iter());
-        assert_eq!(lwm, None); // All partitions are live
+        assert_eq!(lwm, None); // All partitions are caught up
     }
 
     #[test]
     fn test_calculate_low_water_mark_no_timestamps() {
-        let partitions = vec![
+        let partitions = [
             make_partition("t1", 0, None, false, false),
             make_partition("t1", 1, None, false, false),
         ];
@@ -799,7 +846,7 @@ mod tests {
 
     #[test]
     fn test_should_resume_buffer_low() {
-        let partitions = vec![
+        let partitions = [
             make_partition("t1", 0, Some(100), false, true), // paused
             make_partition("t1", 1, Some(200), false, false),
         ];
@@ -809,45 +856,45 @@ mod tests {
     }
 
     #[test]
-    fn test_should_resume_buffer_high_not_all_live() {
-        let partitions = vec![
+    fn test_should_resume_buffer_high_not_all_caught_up() {
+        let partitions = [
             make_partition("t1", 0, Some(100), false, true), // paused
-            make_partition("t1", 1, Some(200), false, false), // not paused, not live
+            make_partition("t1", 1, Some(200), false, false), // not paused, not caught up
         ];
 
-        // Buffer (150) >= batch_size (100), and non-paused partition is not live => don't resume
+        // Buffer (150) >= batch_size (100), and non-paused partition is not caught up => don't resume
         assert!(!should_resume_partitions(partitions.iter(), 150, 100));
     }
 
     #[test]
-    fn test_should_resume_all_active_partitions_live() {
-        let partitions = vec![
+    fn test_should_resume_all_active_partitions_caught_up() {
+        let partitions = [
             make_partition("t1", 0, Some(100), false, true), // paused (doesn't count)
-            make_partition("t1", 1, Some(200), true, false), // not paused, live
+            make_partition("t1", 1, Some(200), true, false), // not paused, caught up
         ];
 
-        // Buffer (150) >= batch_size (100), but all non-paused partitions are live => should resume
+        // Buffer (150) >= batch_size (100), but all non-paused partitions are caught up => should resume
         assert!(should_resume_partitions(partitions.iter(), 150, 100));
     }
 
     #[test]
     fn test_should_resume_scenario_from_issue() {
-        // Scenario: A (paused, was far ahead), B (paused), C (active, now caught up/live)
-        let partitions = vec![
+        // Scenario: A (paused, was far ahead), B (paused), C (active, now caught up)
+        let partitions = [
             make_partition("t1", 0, Some(1000), false, true), // A: paused
             make_partition("t1", 1, Some(800), false, true),  // B: paused
-            make_partition("t1", 2, Some(1000), true, false), // C: active, now live
+            make_partition("t1", 2, Some(1000), true, false), // C: active, caught up
         ];
 
         // Buffer still has 500 messages (>= batch_size 100)
-        // But the only non-paused partition (C) is live
+        // But the only non-paused partition (C) is caught up
         // => should resume to make progress
         assert!(should_resume_partitions(partitions.iter(), 500, 100));
     }
 
     #[test]
     fn test_select_partitions_to_pause_basic() {
-        let partitions = vec![
+        let partitions = [
             make_partition("t1", 0, Some(100), false, false), // at low water mark
             make_partition("t1", 1, Some(500), false, false), // ahead
             make_partition("t1", 2, Some(800), false, false), // further ahead
@@ -862,7 +909,7 @@ mod tests {
 
     #[test]
     fn test_select_partitions_to_pause_skips_already_paused() {
-        let partitions = vec![
+        let partitions = [
             make_partition("t1", 0, Some(100), false, false),
             make_partition("t1", 1, Some(500), false, true), // already paused
             make_partition("t1", 2, Some(800), false, false),
@@ -877,7 +924,7 @@ mod tests {
 
     #[test]
     fn test_select_partitions_to_pause_none_ahead() {
-        let partitions = vec![
+        let partitions = [
             make_partition("t1", 0, Some(100), false, false),
             make_partition("t1", 1, Some(100), false, false),
         ];
@@ -888,7 +935,7 @@ mod tests {
 
     #[test]
     fn test_select_partitions_to_pause_no_timestamps() {
-        let partitions = vec![
+        let partitions = [
             make_partition("t1", 0, None, false, false),
             make_partition("t1", 1, None, false, false),
         ];
