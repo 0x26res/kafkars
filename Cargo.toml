@@ -4,6 +4,9 @@ pyo3 = {version = "0.26.0", features = ["abi3-py310"]}
 rdkafka = "0.38.0"
 uuid = {version = "1", features = ["v4"]}
 
+[features]
+testing = []
+
 [lib]
 crate-type = ["cdylib"]
 name = "kafkars"

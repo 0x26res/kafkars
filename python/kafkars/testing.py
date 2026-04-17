@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from kafkars._lib import run_test_scenario as _run_test_scenario
+from kafkars._lib import run_test_scenario_with_data, run_test_scenario  # type: ignore[unresolved-import]
 
 
 @dataclass
@@ -45,37 +45,7 @@ class TestResult:
             raise AssertionError("Test scenario failed:\n" + "\n".join(failures))
 
 
-def run_scenario(scenario: dict[str, Any] | str) -> TestResult:
-    """Run a test scenario against the mock consumer.
-
-    Args:
-        scenario: Either a dict representing the scenario or a JSON string.
-
-    Returns:
-        TestResult with pass/fail status and detailed batch results.
-
-    Example:
-        >>> result = run_scenario({
-        ...     "name": "simple",
-        ...     "config": {
-        ...         "topics": [{"name": "t", "partitions": [{"partition": 0, "start_offset": 0, "end_offset": 10}]}],
-        ...         "cutoff_ms": 1000,
-        ...         "batch_size": 5
-        ...     },
-        ...     "batches": [{
-        ...         "messages": [{"topic": "t", "partition": 0, "offset": 0, "timestamp_ms": 500}],
-        ...         "expected_released": [{"topic": "t", "partition": 0, "offset": 0}]
-        ...     }]
-        ... })
-        >>> assert result.passed
-    """
-    if isinstance(scenario, dict):
-        scenario_json = json.dumps(scenario)
-    else:
-        scenario_json = scenario
-
-    result = _run_test_scenario(scenario_json)
-
+def _wrap_result(result: Any) -> TestResult:
     return TestResult(
         passed=result.passed,
         batch_results=[
@@ -93,15 +63,39 @@ def run_scenario(scenario: dict[str, Any] | str) -> TestResult:
     )
 
 
-def load_scenario(path: str | Path) -> dict[str, Any]:
-    """Load a test scenario from a JSON file.
+def run_scenario(scenario: dict[str, Any] | str) -> TestResult:
+    """Run a self-contained test scenario against the mock consumer.
 
     Args:
-        path: Path to the JSON scenario file.
+        scenario: Either a dict representing the scenario or a JSON string.
 
     Returns:
-        Parsed scenario as a dictionary.
+        TestResult with pass/fail status and detailed batch results.
     """
+    scenario_json = json.dumps(scenario) if isinstance(scenario, dict) else scenario
+    return _wrap_result(run_test_scenario(scenario_json))
+
+
+def run_scenario_with_data(
+    scenario: dict[str, Any] | str,
+    data: dict[str, Any] | str,
+) -> TestResult:
+    """Run a split-format scenario (scenario + data) against the mock consumer.
+
+    Args:
+        scenario: Scenario spec as a dict or JSON string.
+        data: Topic data as a dict or JSON string.
+
+    Returns:
+        TestResult with pass/fail status and detailed batch results.
+    """
+    scenario_json = json.dumps(scenario) if isinstance(scenario, dict) else scenario
+    data_json = json.dumps(data) if isinstance(data, dict) else data
+    return _wrap_result(run_test_scenario_with_data(scenario_json, data_json))
+
+
+def load_scenario(path: str | Path) -> dict[str, Any]:
+    """Load a test scenario from a JSON file."""
     with open(path) as f:
         return json.load(f)
 
@@ -109,11 +103,16 @@ def load_scenario(path: str | Path) -> dict[str, Any]:
 def run_scenario_file(path: str | Path) -> TestResult:
     """Load and run a test scenario from a JSON file.
 
-    Args:
-        path: Path to the JSON scenario file.
-
-    Returns:
-        TestResult with pass/fail status and detailed batch results.
+    Auto-detects format: if the scenario has a "data" key, resolves the data
+    file from tests/data/ relative to the scenario's parent directory.
     """
+    path = Path(path)
     scenario = load_scenario(path)
+
+    if "data" in scenario:
+        data_path = path.parent.parent / "data" / scenario["data"]
+        with open(data_path) as f:
+            data = json.load(f)
+        return run_scenario_with_data(scenario, data)
+
     return run_scenario(scenario)

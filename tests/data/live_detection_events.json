@@ -1,0 +1,13 @@
+{
+  "events": {
+    "0": [
+      {"offset": 0, "timestamp_ms": 500},
+      {"offset": 1, "timestamp_ms": 600}
+    ],
+    "1": [
+      {"offset": 0, "timestamp_ms": 400},
+      {"offset": 1, "timestamp_ms": 700},
+      {"offset": 2, "timestamp_ms": 1000}
+    ]
+  }
+}

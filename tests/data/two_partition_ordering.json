@@ -1,0 +1,12 @@
+{
+  "events": {
+    "0": [
+      {"offset": 0, "timestamp_ms": 1000, "value": "p0-msg0"},
+      {"offset": 1, "timestamp_ms": 1500, "value": "p0-msg1"}
+    ],
+    "1": [
+      {"offset": 0, "timestamp_ms": 500, "value": "p1-msg0"},
+      {"offset": 1, "timestamp_ms": 800, "value": "p1-msg1"}
+    ]
+  }
+}

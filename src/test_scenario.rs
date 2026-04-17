@@ -1,6 +1,7 @@
 //! Test scenario data structures for JSON-driven testing.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// A complete test scenario that can be loaded from JSON.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -123,6 +124,172 @@ impl TestScenario {
     }
 }
 
+// --- Split-format types (data file + scenario file) ---
+
+/// A message in a data file. Topic and partition come from the map keys.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DataMessage {
+    pub offset: i64,
+    pub timestamp_ms: i64,
+    #[serde(default)]
+    pub key: Option<String>,
+    #[serde(default)]
+    pub value: Option<String>,
+}
+
+/// Parsed data file: topic name -> partition id (as string) -> messages.
+pub type TopicData = HashMap<String, HashMap<String, Vec<DataMessage>>>;
+
+/// Per-topic config in a scenario spec.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TopicSpec {
+    pub partitions: Vec<i32>,
+    /// Override end offsets per partition. Absent -> derived from data (last offset + 1).
+    #[serde(default)]
+    pub end_offsets: HashMap<String, i64>,
+}
+
+/// Config section of a scenario spec.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScenarioConfig {
+    pub topics: HashMap<String, TopicSpec>,
+    pub cutoff_ms: i64,
+    pub batch_size: usize,
+}
+
+/// A batch in the scenario spec -- references offsets by id, not full messages.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScenarioBatch {
+    #[serde(default)]
+    pub description: String,
+    /// topic -> partition (string) -> list of offsets to poll.
+    pub poll: HashMap<String, HashMap<String, Vec<i64>>>,
+    #[serde(default)]
+    pub expected_released: Vec<ExpectedMessage>,
+    #[serde(default)]
+    pub expected_partition_state: Vec<ExpectedPartitionState>,
+}
+
+/// Scenario spec parsed from the new-format scenario file.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScenarioSpec {
+    pub name: String,
+    /// Filename of the data file (resolved externally by Python).
+    #[serde(default)]
+    pub data: Option<String>,
+    pub config: ScenarioConfig,
+    pub batches: Vec<ScenarioBatch>,
+}
+
+impl ScenarioSpec {
+    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(json)
+    }
+
+    /// Resolve against topic data to produce a TestScenario the runner can execute.
+    pub fn resolve(&self, data: &TopicData) -> Result<TestScenario, String> {
+        let mut topic_names: Vec<&String> = self.config.topics.keys().collect();
+        topic_names.sort();
+
+        let mut topic_configs = Vec::new();
+        for topic_name in &topic_names {
+            let spec = &self.config.topics[*topic_name];
+            let topic_data = data
+                .get(*topic_name)
+                .ok_or_else(|| format!("topic '{}' not found in data file", topic_name))?;
+
+            let mut partitions_sorted = spec.partitions.clone();
+            partitions_sorted.sort();
+
+            let mut part_configs = Vec::new();
+            for &pid in &partitions_sorted {
+                let pid_str = pid.to_string();
+                let msgs = topic_data.get(&pid_str).ok_or_else(|| {
+                    format!(
+                        "partition {} of topic '{}' not found in data",
+                        pid, topic_name
+                    )
+                })?;
+                if msgs.is_empty() {
+                    return Err(format!("no messages for {}:{}", topic_name, pid));
+                }
+                let start_offset = msgs.iter().map(|m| m.offset).min().unwrap();
+                let end_offset = spec
+                    .end_offsets
+                    .get(&pid_str)
+                    .copied()
+                    .unwrap_or_else(|| msgs.iter().map(|m| m.offset).max().unwrap() + 1);
+
+                part_configs.push(PartitionConfig {
+                    partition: pid,
+                    start_offset,
+                    end_offset,
+                });
+            }
+            topic_configs.push(TopicConfig {
+                name: (*topic_name).clone(),
+                partitions: part_configs,
+            });
+        }
+
+        let mut batches = Vec::new();
+        for batch in &self.batches {
+            let mut messages = Vec::new();
+            for topic_name in &topic_names {
+                if let Some(topic_poll) = batch.poll.get(*topic_name) {
+                    let topic_data = &data[*topic_name];
+                    let mut pids: Vec<&String> = topic_poll.keys().collect();
+                    pids.sort();
+                    for pid_str in pids {
+                        let offsets = &topic_poll[pid_str];
+                        let part_msgs = topic_data.get(pid_str).ok_or_else(|| {
+                            format!(
+                                "partition {} of topic '{}' not found in data",
+                                pid_str, topic_name
+                            )
+                        })?;
+                        for &off in offsets {
+                            let dm =
+                                part_msgs.iter().find(|m| m.offset == off).ok_or_else(|| {
+                                    format!(
+                                        "offset {} not found in {}:{}",
+                                        off, topic_name, pid_str
+                                    )
+                                })?;
+                            messages.push(TestMessage {
+                                topic: (*topic_name).clone(),
+                                partition: pid_str
+                                    .parse()
+                                    .map_err(|_| format!("bad partition id '{}'", pid_str))?,
+                                offset: dm.offset,
+                                timestamp_ms: dm.timestamp_ms,
+                                key: dm.key.clone(),
+                                value: dm.value.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+            batches.push(TestBatch {
+                description: batch.description.clone(),
+                messages,
+                expected_released: batch.expected_released.clone(),
+                expected_partition_state: batch.expected_partition_state.clone(),
+            });
+        }
+
+        Ok(TestScenario {
+            name: self.name.clone(),
+            config: TestConfig {
+                topics: topic_configs,
+                cutoff_ms: self.config.cutoff_ms,
+                batch_size: self.config.batch_size,
+            },
+            batches,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,5 +392,142 @@ mod tests {
         let parsed = TestScenario::from_json(&json).unwrap();
         assert_eq!(parsed.name, scenario.name);
         assert_eq!(parsed.config.cutoff_ms, scenario.config.cutoff_ms);
+    }
+
+    // --- Split-format tests ---
+
+    fn sample_data() -> TopicData {
+        serde_json::from_str(
+            r#"{
+                "events": {
+                    "0": [
+                        {"offset": 0, "timestamp_ms": 500, "value": "p0-msg0"},
+                        {"offset": 1, "timestamp_ms": 600}
+                    ],
+                    "1": [
+                        {"offset": 0, "timestamp_ms": 400},
+                        {"offset": 1, "timestamp_ms": 700}
+                    ]
+                }
+            }"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_resolve_happy_path() {
+        let spec = ScenarioSpec::from_json(
+            r#"{
+                "name": "resolve test",
+                "config": {
+                    "topics": {"events": {"partitions": [0, 1]}},
+                    "cutoff_ms": 2000,
+                    "batch_size": 10
+                },
+                "batches": [{
+                    "description": "first poll",
+                    "poll": {"events": {"0": [0], "1": [0]}}
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        let resolved = spec.resolve(&sample_data()).unwrap();
+        assert_eq!(resolved.name, "resolve test");
+        assert_eq!(resolved.config.cutoff_ms, 2000);
+        assert_eq!(resolved.config.topics.len(), 1);
+        assert_eq!(resolved.config.topics[0].name, "events");
+
+        let p0 = &resolved.config.topics[0].partitions[0];
+        assert_eq!(p0.start_offset, 0);
+        assert_eq!(p0.end_offset, 2); // derived: max(0,1) + 1
+
+        let batch = &resolved.batches[0];
+        assert_eq!(batch.messages.len(), 2);
+        assert_eq!(batch.messages[0].topic, "events");
+        assert_eq!(batch.messages[0].partition, 0);
+        assert_eq!(batch.messages[0].offset, 0);
+        assert_eq!(batch.messages[0].timestamp_ms, 500);
+        assert_eq!(batch.messages[0].value, Some("p0-msg0".to_string()));
+        assert_eq!(batch.messages[1].partition, 1);
+        assert_eq!(batch.messages[1].timestamp_ms, 400);
+    }
+
+    #[test]
+    fn test_resolve_explicit_end_offsets() {
+        let spec = ScenarioSpec::from_json(
+            r#"{
+                "name": "end offset override",
+                "config": {
+                    "topics": {"events": {"partitions": [0], "end_offsets": {"0": 100}}},
+                    "cutoff_ms": 2000,
+                    "batch_size": 10
+                },
+                "batches": []
+            }"#,
+        )
+        .unwrap();
+
+        let resolved = spec.resolve(&sample_data()).unwrap();
+        assert_eq!(resolved.config.topics[0].partitions[0].end_offset, 100);
+    }
+
+    #[test]
+    fn test_resolve_missing_topic_error() {
+        let spec = ScenarioSpec::from_json(
+            r#"{
+                "name": "bad topic",
+                "config": {
+                    "topics": {"missing": {"partitions": [0]}},
+                    "cutoff_ms": 1000,
+                    "batch_size": 10
+                },
+                "batches": []
+            }"#,
+        )
+        .unwrap();
+
+        let err = spec.resolve(&sample_data()).unwrap_err();
+        assert!(err.contains("not found in data"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_resolve_missing_partition_error() {
+        let spec = ScenarioSpec::from_json(
+            r#"{
+                "name": "bad partition",
+                "config": {
+                    "topics": {"events": {"partitions": [0, 99]}},
+                    "cutoff_ms": 1000,
+                    "batch_size": 10
+                },
+                "batches": []
+            }"#,
+        )
+        .unwrap();
+
+        let err = spec.resolve(&sample_data()).unwrap_err();
+        assert!(err.contains("partition 99"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_resolve_missing_offset_error() {
+        let spec = ScenarioSpec::from_json(
+            r#"{
+                "name": "bad offset",
+                "config": {
+                    "topics": {"events": {"partitions": [0]}},
+                    "cutoff_ms": 1000,
+                    "batch_size": 10
+                },
+                "batches": [{
+                    "poll": {"events": {"0": [999]}}
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        let err = spec.resolve(&sample_data()).unwrap_err();
+        assert!(err.contains("offset 999"), "got: {}", err);
     }
 }
