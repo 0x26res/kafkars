@@ -132,7 +132,7 @@ def parse_topic(topic_spec: str):
 @app.command()
 def poll(
     bootstrap_servers: str = typer.Option(
-        ...,
+        "localhost:9092",
         "--bootstrap-servers",
         help="Kafka bootstrap servers (e.g., localhost:9092)",
     ),
@@ -142,18 +142,19 @@ def poll(
         help="Topics with policy: topic:policy[:time_ms]. "
         "Policies: latest, earliest, relative_time, absolute_time. "
         "Can be specified multiple times.",
+        default_factory=lambda: ["test:earliest"],
     ),
     timeout_ms: int = typer.Option(
-        1000, "--timeout", help="Poll timeout in milliseconds"
+        1_000, "--timeout", help="Poll timeout in milliseconds"
     ),
     max_batches: Optional[int] = typer.Option(
         None, "--max-batches", help="Maximum number of batches to consume"
     ),
     batch_size: int = typer.Option(
-        1000, "--batch-size", help="Maximum messages per batch"
+        10_000, "--batch-size", help="Maximum messages per batch"
     ),
     show_state: bool = typer.Option(
-        False, "--show-state", help="Show partition state after each poll"
+        True, "--show-state", help="Show partition state after each poll"
     ),
 ) -> None:
     """Poll messages from Kafka topics and display them as markdown tables."""
@@ -184,7 +185,6 @@ def poll(
     try:
         while True:
             batch = manager.poll(timeout_ms)
-
             if batch.num_rows > 0:
                 state = manager.partition_state()
                 processor.process(batch, state, manager.is_live())

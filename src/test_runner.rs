@@ -408,4 +408,38 @@ mod tests {
             result.batch_results
         );
     }
+
+    #[test]
+    fn test_empty_partition_is_live() {
+        // A partition with start_offset == end_offset has nothing to consume,
+        // so it should be live immediately.
+        let json = r#"{
+            "name": "empty partition is live",
+            "config": {
+                "topics": [{"name": "events", "partitions": [
+                    {"partition": 0, "start_offset": 0, "end_offset": 0}
+                ]}],
+                "cutoff_ms": 9999,
+                "batch_size": 10
+            },
+            "batches": [
+                {
+                    "description": "no messages - partition is already live",
+                    "messages": [],
+                    "expected_partition_state": [
+                        {"topic": "events", "partition": 0, "is_live": true}
+                    ]
+                }
+            ]
+        }"#;
+
+        let scenario = TestScenario::from_json(json).unwrap();
+        let result = run_scenario(&scenario);
+
+        assert!(
+            result.passed,
+            "Scenario should pass: {:?}",
+            result.batch_results
+        );
+    }
 }

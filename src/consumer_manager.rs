@@ -188,8 +188,12 @@ impl<C: KafkaConsumer> ConsumerManager<C> {
             .iter()
             .map(|so| {
                 let key = (so.topic.clone(), so.partition);
-                let info =
+                let mut info =
                     PartitionInfo::new(so.topic.clone(), so.partition, so.replay_start_offset);
+                // Nothing to consume: partition is already live
+                if so.replay_start_offset >= so.replay_end_offset {
+                    info.is_live = true;
+                }
                 (key, info)
             })
             .collect();
