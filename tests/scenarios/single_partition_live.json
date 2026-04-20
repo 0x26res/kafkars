@@ -2,7 +2,6 @@
   "name": "Single partition becomes live after consuming last message",
   "config": {
     "topics": {"events": {"partitions": [0]}},
-    "cutoff_ms": 9999,
     "batch_size": 10
   },
   "batches": [

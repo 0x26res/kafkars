@@ -165,7 +165,6 @@ pub struct ConsumerManager<C: KafkaConsumer> {
     consumer: C,
     topic_names: Vec<String>,
     start_offsets: StartOffsets,
-    cutoff_ms: i64,
     partition_info: HashMap<(String, i32), PartitionInfo>,
     held_messages: Vec<TimestampedMessage>,
     batch_size: usize,
@@ -183,7 +182,6 @@ impl<C: KafkaConsumer> ConsumerManager<C> {
         consumer: C,
         topic_names: Vec<String>,
         start_offsets: StartOffsets,
-        cutoff_ms: i64,
         batch_size: usize,
     ) -> Self {
         // Initialize partition_info from start_offsets
@@ -206,7 +204,6 @@ impl<C: KafkaConsumer> ConsumerManager<C> {
             consumer,
             topic_names,
             start_offsets,
-            cutoff_ms,
             partition_info,
             held_messages: Vec::new(),
             batch_size,
@@ -223,10 +220,9 @@ impl<C: KafkaConsumer> ConsumerManager<C> {
         consumer: C,
         start_offsets: StartOffsets,
         topic_names: Vec<String>,
-        cutoff_ms: i64,
         batch_size: usize,
     ) -> Self {
-        Self::new(consumer, topic_names, start_offsets, cutoff_ms, batch_size)
+        Self::new(consumer, topic_names, start_offsets, batch_size)
     }
 
     /// Get a reference to the underlying consumer.
@@ -239,7 +235,6 @@ impl ConsumerManager<BaseConsumer> {
     pub fn create(
         mut config: HashMap<String, String>,
         source_topics: Vec<SourceTopic>,
-        cutoff_ms: Option<i64>,
         batch_size: Option<usize>,
     ) -> Result<Self, String> {
         // Validate that topic names are unique
@@ -254,14 +249,6 @@ impl ConsumerManager<BaseConsumer> {
         config
             .entry("group.id".to_string())
             .or_insert_with(|| uuid::Uuid::new_v4().to_string());
-
-        // Default cutoff_ms to now
-        let cutoff_ms = cutoff_ms.unwrap_or_else(|| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system clock before epoch")
-                .as_millis() as i64
-        });
 
         // Default batch_size to 10_000
         let batch_size = batch_size.unwrap_or(10_000);
@@ -354,13 +341,7 @@ impl ConsumerManager<BaseConsumer> {
 
         let topic_names = source_topics.into_iter().map(|t| t.name).collect();
         let start_offsets = StartOffsets::from_vec(resolved_offsets);
-        Ok(Self::new(
-            consumer,
-            topic_names,
-            start_offsets,
-            cutoff_ms,
-            batch_size,
-        ))
+        Ok(Self::new(consumer, topic_names, start_offsets, batch_size))
     }
 
     /// Resolves the start offset based on policy and fetches the end offset (high watermark).
@@ -514,10 +495,7 @@ where
                 .start_offsets
                 .get_replay_end_offset(&msg.topic, msg.partition)
                 .unwrap_or(i64::MAX);
-            // Caught up internally when consumption reaches end offset or cutoff.
-            // This drives ordering/backpressure decisions.
-            info.is_caught_up =
-                msg.timestamp_ms >= self.cutoff_ms || (msg.offset + 1) >= replay_end_offset;
+            info.is_caught_up = (msg.offset + 1) >= replay_end_offset;
         }
     }
 
@@ -535,10 +513,9 @@ where
             return i64::MAX;
         }
 
-        match self.low_water_mark_ms {
-            Some(lwm) => lwm.min(self.cutoff_ms),
-            None => self.cutoff_ms,
-        }
+        // During replay, release up to the low water mark to preserve
+        // cross-partition timestamp ordering.
+        self.low_water_mark_ms.unwrap_or(i64::MAX)
     }
 
     fn release_messages(&mut self) -> Vec<TimestampedMessage> {
@@ -565,8 +542,7 @@ where
                     .start_offsets
                     .get_replay_end_offset(&msg.topic, msg.partition)
                     .unwrap_or(i64::MAX);
-                info.is_live =
-                    msg.timestamp_ms >= self.cutoff_ms || (msg.offset + 1) >= replay_end_offset;
+                info.is_live = (msg.offset + 1) >= replay_end_offset;
             }
         }
 
@@ -665,10 +641,6 @@ where
     pub fn start_offsets(&self) -> &StartOffsets {
         &self.start_offsets
     }
-
-    pub fn cutoff_ms(&self) -> i64 {
-        self.cutoff_ms
-    }
 }
 
 #[cfg(test)]
@@ -754,7 +726,7 @@ mod tests {
             SourceTopic::from_earliest("topic_1".to_string()),
         ];
 
-        let result = ConsumerManager::create(config, topics, Some(0), Some(100));
+        let result = ConsumerManager::create(config, topics, Some(100));
         match result {
             Err(e) => assert!(
                 e.contains("duplicate topic"),

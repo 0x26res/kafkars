@@ -1,13 +1,11 @@
 {
-  "name": "Partition becomes live at cutoff or end offset",
+  "name": "Partition becomes live when reaching end offset",
   "config": {
     "topics": {
       "events": {
-        "partitions": [0, 1],
-        "end_offsets": {"1": 100}
+        "partitions": [0, 1]
       }
     },
-    "cutoff_ms": 1000,
     "batch_size": 10
   },
   "batches": [
@@ -36,7 +34,7 @@
       ]
     },
     {
-      "description": "Partition 1 reaches cutoff (1000ms) - becomes live",
+      "description": "Partition 1 reaches end offset - becomes live",
       "poll": {"events": {"1": [2]}},
       "expected_released": [
         {"topic": "events", "partition": 1, "offset": 2}

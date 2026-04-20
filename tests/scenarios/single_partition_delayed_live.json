@@ -2,7 +2,6 @@
   "name": "Single partition not live until message arrives",
   "config": {
     "topics": {"events": {"partitions": [0]}},
-    "cutoff_ms": 9999,
     "batch_size": 10
   },
   "batches": [
