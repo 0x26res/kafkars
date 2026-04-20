@@ -19,8 +19,6 @@ pub struct TestScenario {
 pub struct TestConfig {
     /// Topics to consume from.
     pub topics: Vec<TopicConfig>,
-    /// Cutoff timestamp in milliseconds.
-    pub cutoff_ms: i64,
     /// Batch size for message release.
     pub batch_size: usize,
 }
@@ -153,7 +151,6 @@ pub struct TopicSpec {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ScenarioConfig {
     pub topics: HashMap<String, TopicSpec>,
-    pub cutoff_ms: i64,
     pub batch_size: usize,
 }
 
@@ -279,7 +276,6 @@ impl ScenarioSpec {
             name: self.name.clone(),
             config: TestConfig {
                 topics: topic_configs,
-                cutoff_ms: self.config.cutoff_ms,
                 batch_size: self.config.batch_size,
             },
             batches,
@@ -297,7 +293,7 @@ mod tests {
             "name": "minimal test",
             "config": {
                 "topics": [{"name": "events", "partitions": [{"partition": 0, "start_offset": 0, "end_offset": 100}]}],
-                "cutoff_ms": 2000,
+
                 "batch_size": 10
             },
             "batches": []
@@ -305,7 +301,6 @@ mod tests {
 
         let scenario = TestScenario::from_json(json).unwrap();
         assert_eq!(scenario.name, "minimal test");
-        assert_eq!(scenario.config.cutoff_ms, 2000);
         assert_eq!(scenario.config.batch_size, 10);
         assert_eq!(scenario.config.topics.len(), 1);
         assert_eq!(scenario.config.topics[0].name, "events");
@@ -326,7 +321,7 @@ mod tests {
                         ]
                     }
                 ],
-                "cutoff_ms": 2000,
+
                 "batch_size": 10
             },
             "batches": [
@@ -379,7 +374,6 @@ mod tests {
                         end_offset: 100,
                     }],
                 }],
-                cutoff_ms: 1000,
                 batch_size: 5,
             },
             batches: vec![],
@@ -388,7 +382,7 @@ mod tests {
         let json = scenario.to_json().unwrap();
         let parsed = TestScenario::from_json(&json).unwrap();
         assert_eq!(parsed.name, scenario.name);
-        assert_eq!(parsed.config.cutoff_ms, scenario.config.cutoff_ms);
+        assert_eq!(parsed.config.batch_size, scenario.config.batch_size);
     }
 
     // --- Split-format tests ---
@@ -418,7 +412,7 @@ mod tests {
                 "name": "resolve test",
                 "config": {
                     "topics": {"events": {"partitions": [0, 1]}},
-                    "cutoff_ms": 2000,
+    
                     "batch_size": 10
                 },
                 "batches": [{
@@ -431,7 +425,6 @@ mod tests {
 
         let resolved = spec.resolve(&sample_data()).unwrap();
         assert_eq!(resolved.name, "resolve test");
-        assert_eq!(resolved.config.cutoff_ms, 2000);
         assert_eq!(resolved.config.topics.len(), 1);
         assert_eq!(resolved.config.topics[0].name, "events");
 
@@ -457,7 +450,7 @@ mod tests {
                 "name": "end offset override",
                 "config": {
                     "topics": {"events": {"partitions": [0], "end_offsets": {"0": 100}}},
-                    "cutoff_ms": 2000,
+    
                     "batch_size": 10
                 },
                 "batches": []
@@ -476,7 +469,7 @@ mod tests {
                 "name": "bad topic",
                 "config": {
                     "topics": {"missing": {"partitions": [0]}},
-                    "cutoff_ms": 1000,
+    
                     "batch_size": 10
                 },
                 "batches": []
@@ -495,7 +488,7 @@ mod tests {
                 "name": "bad partition",
                 "config": {
                     "topics": {"events": {"partitions": [0, 99]}},
-                    "cutoff_ms": 1000,
+    
                     "batch_size": 10
                 },
                 "batches": []
@@ -514,7 +507,7 @@ mod tests {
                 "name": "bad offset",
                 "config": {
                     "topics": {"events": {"partitions": [0]}},
-                    "cutoff_ms": 1000,
+    
                     "batch_size": 10
                 },
                 "batches": [{

@@ -55,7 +55,6 @@ pub fn run_scenario(scenario: &TestScenario) -> TestResult {
         mock,
         start_offsets,
         topic_names,
-        scenario.config.cutoff_ms,
         scenario.config.batch_size,
     );
 
@@ -267,7 +266,7 @@ mod tests {
             "name": "simple single message",
             "config": {
                 "topics": [{"name": "events", "partitions": [{"partition": 0, "start_offset": 0, "end_offset": 100}]}],
-                "cutoff_ms": 2000,
+
                 "batch_size": 10
             },
             "batches": [
@@ -313,7 +312,7 @@ mod tests {
                     {"partition": 0, "start_offset": 0, "end_offset": 100},
                     {"partition": 1, "start_offset": 0, "end_offset": 100}
                 ]}],
-                "cutoff_ms": 2000,
+
                 "batch_size": 10
             },
             "batches": [
@@ -388,44 +387,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cutoff_makes_live() {
-        // Test that reaching cutoff timestamp marks partition as live
-        let json = r#"{
-            "name": "cutoff makes live",
-            "config": {
-                "topics": [{"name": "events", "partitions": [
-                    {"partition": 0, "start_offset": 0, "end_offset": 100}
-                ]}],
-                "cutoff_ms": 1000,
-                "batch_size": 10
-            },
-            "batches": [
-                {
-                    "description": "message at cutoff",
-                    "messages": [
-                        {"topic": "events", "partition": 0, "offset": 0, "timestamp_ms": 1000}
-                    ],
-                    "expected_released": [
-                        {"topic": "events", "partition": 0, "offset": 0}
-                    ],
-                    "expected_partition_state": [
-                        {"topic": "events", "partition": 0, "is_live": true}
-                    ]
-                }
-            ]
-        }"#;
-
-        let scenario = TestScenario::from_json(json).unwrap();
-        let result = run_scenario(&scenario);
-
-        assert!(
-            result.passed,
-            "Scenario should pass: {:?}",
-            result.batch_results
-        );
-    }
-
-    #[test]
     fn test_end_offset_makes_live() {
         // Test that reaching end offset marks partition as live
         let json = r#"{
@@ -434,7 +395,7 @@ mod tests {
                 "topics": [{"name": "events", "partitions": [
                     {"partition": 0, "start_offset": 0, "end_offset": 1}
                 ]}],
-                "cutoff_ms": 2000,
+
                 "batch_size": 10
             },
             "batches": [
@@ -473,7 +434,7 @@ mod tests {
                 "topics": [{"name": "events", "partitions": [
                     {"partition": 0, "start_offset": 0, "end_offset": 0}
                 ]}],
-                "cutoff_ms": 9999,
+
                 "batch_size": 10
             },
             "batches": [

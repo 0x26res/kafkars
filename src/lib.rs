@@ -126,16 +126,15 @@ struct PyConsumerManager {
 #[pymethods]
 impl PyConsumerManager {
     #[new]
-    #[pyo3(signature = (config, topics, cutoff_ms=None, batch_size=None))]
+    #[pyo3(signature = (config, topics, batch_size=None))]
     fn new(
         config: HashMap<String, String>,
         topics: Vec<PySourceTopic>,
-        cutoff_ms: Option<i64>,
         batch_size: Option<usize>,
     ) -> PyResult<Self> {
         let source_topics: Vec<SourceTopic> = topics.into_iter().map(|t| t.0).collect();
 
-        let manager = RealConsumerManager::create(config, source_topics, cutoff_ms, batch_size)
+        let manager = RealConsumerManager::create(config, source_topics, batch_size)
             .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
 
         Ok(Self {
