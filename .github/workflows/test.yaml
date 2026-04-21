@@ -28,7 +28,7 @@ jobs:
       with:
         version: "0.7.19"
 
-    - uses: extractions/setup-just@v2
+    - uses: extractions/setup-just@v4
 
     - name: Build
       run: just develop
